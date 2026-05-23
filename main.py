@@ -307,10 +307,23 @@ def generate_section(client, topic, date_str):
                 "search_ok": False, "usage": dict(_ZERO_USAGE)}
 
     text, searches, errors = _parse_response(response)
-    search_ok = searches > 0 and not errors
 
-    if errors:
-        logger.warning("Topic '%s' web search errors: %s", topic["title"], errors)
+    # Some models (notably Haiku) narrate before the content, e.g.
+    # "I'll search for...Here is the section:". The section must begin at the
+    # emoji header, so drop anything before the first occurrence of the emoji.
+    idx = text.find(topic["emoji"])
+    if idx > 0:
+        text = text[idx:].strip()
+    elif idx == -1 and text:
+        text = header + "\n" + text  # model omitted the header; restore it
+
+    # 'max_uses_exceeded' is not a real failure — the searches that ran returned
+    # results; the model merely asked for one more than the cap allows.
+    real_errors = [e for e in errors if e != "max_uses_exceeded"]
+    search_ok = searches > 0 and not real_errors
+
+    if real_errors:
+        logger.warning("Topic '%s' web search errors: %s", topic["title"], real_errors)
     logger.info(
         "Topic '%s': %d web search(es), errors=%s",
         topic["title"], searches, errors or "none",
