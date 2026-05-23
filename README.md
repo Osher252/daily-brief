@@ -92,7 +92,36 @@ live web results.
 You need (a) something that runs `main.py` daily, and (b) the feed served over
 HTTPS (Alexa requires HTTPS).
 
-**Simple always-on server (VPS / Raspberry Pi):**
+### Recommended: GitHub Actions + GitHub Pages (no server, free)
+
+This repo ships with `.github/workflows/daily-brief.yml`, which does both:
+
+- Runs daily at **07:00 Europe/London** (it fires at 06:00 and 07:00 UTC and a
+  "gate" job only proceeds when it is actually 7am in London, so daylight saving
+  is handled automatically). You can also trigger it manually from the
+  repository's **Actions** tab ("Run workflow").
+- Generates the brief, copies `output/alexa_feed.json` to `docs/alexa_feed.json`,
+  and commits it back to the repo.
+- **GitHub Pages** serves `docs/` over HTTPS, so the feed is available at
+  `https://<user>.github.io/<repo>/alexa_feed.json`.
+
+One-time setup:
+
+1. Push this repo to GitHub (public, so free GitHub Pages can serve it).
+2. Repo **Settings → Secrets and variables → Actions → New repository secret**:
+   name `ANTHROPIC_API_KEY`, value your key.
+3. Repo **Settings → Pages**: Source = "Deploy from a branch", Branch = `main`,
+   Folder = `/docs`.
+4. Run the workflow once from the **Actions** tab to generate the first brief.
+
+Why not run the generation on a serverless platform (e.g. Vercel functions)?
+The six topics are fetched sequentially (to stay under entry-tier API rate
+limits) and take ~5 minutes, which bumps into typical serverless time limits.
+GitHub Actions has no such limit, so it is the better fit for the generation
+step. Any static host (including Vercel/Netlify) is fine for *serving* the
+finished JSON file.
+
+### Alternative: always-on server (VPS / Raspberry Pi)
 1. Clone the project, create the venv, set `.env`.
 2. Add the crontab entry above for daily generation.
 3. Run the server: `uvicorn server:app --host 0.0.0.0 --port 8000`
