@@ -56,8 +56,9 @@ uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
 Choose the model with `BRIEF_MODEL` in `.env`:
-- `claude-sonnet-4-6` (default) — strong and cost-effective for a daily run.
-- `claude-opus-4-7` — maximum quality.
+- `claude-haiku-4-5` (default) — fastest and cheapest ($1/$5 per Mtok); fine for a news brief.
+- `claude-sonnet-4-6` — sharper writing ($3/$15 per Mtok).
+- `claude-opus-4-7` — maximum quality ($5/$25 per Mtok).
 
 ## Scheduling
 

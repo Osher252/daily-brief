@@ -38,7 +38,9 @@ load_dotenv(BASE_DIR / ".env")
 # Use "claude-opus-4-7" for maximum quality, or "claude-sonnet-4-6" (default)
 # for a strong, cost-effective daily run.
 # `or` (not a default arg) so an empty BRIEF_MODEL="" still falls back correctly.
-MODEL = os.getenv("BRIEF_MODEL") or "claude-sonnet-4-6"
+# Default is Haiku 4.5 — fastest and cheapest, fine for a news brief. Switch to
+# "claude-sonnet-4-6" (sharper writing) or "claude-opus-4-7" via BRIEF_MODEL.
+MODEL = os.getenv("BRIEF_MODEL") or "claude-haiku-4-5"
 
 # Alexa Flash Briefing requires a valid, absolute https URL here — an empty
 # string is rejected. Points at the GitHub Pages site that hosts the feed.
@@ -49,10 +51,14 @@ REDIRECT_URL = os.getenv("BRIEF_REDIRECT_URL") or "https://osher252.github.io/da
 MAX_MAINTEXT_CHARS = 4400
 
 # Approximate pricing for the per-run cost estimate logged at the end (USD).
-# Update if Anthropic changes prices or you switch model.
-PRICE_INPUT_PER_M = 3.0    # claude-sonnet-4-6 input, $ per million tokens
-PRICE_OUTPUT_PER_M = 15.0  # claude-sonnet-4-6 output, $ per million tokens
-PRICE_PER_SEARCH = 0.01    # web search, $10 per 1,000 searches
+# ($ per million tokens) input, output — keyed by model. Update if prices change.
+PRICING = {
+    "claude-haiku-4-5": (1.0, 5.0),
+    "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-opus-4-7": (5.0, 25.0),
+}
+PRICE_INPUT_PER_M, PRICE_OUTPUT_PER_M = PRICING.get(MODEL, (1.0, 5.0))
+PRICE_PER_SEARCH = 0.01    # web search, $10 per 1,000 searches (model-independent)
 USD_TO_GBP = 0.79          # rough, for a friendly pence figure in the log
 
 LONDON = ZoneInfo("Europe/London")
