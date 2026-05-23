@@ -2,11 +2,12 @@ name: Daily Brief
 
 on:
   schedule:
-    # GitHub's timer runs in UTC. London is UTC+1 in summer (BST) and UTC+0 in
-    # winter (GMT), so we fire at BOTH 06:00 and 07:00 UTC. The "gate" job below
-    # then lets the real work run only when it is actually 07:00 in London —
-    # giving us exactly one brief a day at 7am London, all year round.
-    - cron: "0 6,7 * * *"
+    # Weekdays only (Mon-Fri). GitHub's timer runs in UTC. London is UTC+1 in
+    # summer (BST) and UTC+0 in winter (GMT), so we fire at BOTH 06:00 and 07:00
+    # UTC. The "gate" job below then lets the real work run only when it is
+    # actually 07:00 in London — giving us one brief each weekday at 7am London,
+    # all year round. (06:00/07:00 UTC on Mon-Fri stays Mon-Fri in London.)
+    - cron: "0 6,7 * * 1-5"
   workflow_dispatch: {}   # also lets you run it on demand from the Actions tab
 
 permissions:
