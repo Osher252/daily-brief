@@ -48,6 +48,13 @@ REDIRECT_URL = os.getenv("BRIEF_REDIRECT_URL") or "https://osher252.github.io/da
 # hard-trim as a safety net so the feed can never be rejected for length.
 MAX_MAINTEXT_CHARS = 4400
 
+# Approximate pricing for the per-run cost estimate logged at the end (USD).
+# Update if Anthropic changes prices or you switch model.
+PRICE_INPUT_PER_M = 3.0    # claude-sonnet-4-6 input, $ per million tokens
+PRICE_OUTPUT_PER_M = 15.0  # claude-sonnet-4-6 output, $ per million tokens
+PRICE_PER_SEARCH = 0.01    # web search, $10 per 1,000 searches
+USD_TO_GBP = 0.79          # rough, for a friendly pence figure in the log
+
 LONDON = ZoneInfo("Europe/London")
 
 # Server-side web search tool. The type string is the released version id.
@@ -197,6 +204,23 @@ def _parse_response(response):
     return text, search_count, errors
 
 
+def _usage_of(response):
+    """Pull token + web-search counts from a response for cost tracking."""
+    u = getattr(response, "usage", None)
+    searches = 0
+    stu = getattr(u, "server_tool_use", None)
+    if stu is not None:
+        searches = getattr(stu, "web_search_requests", 0) or 0
+    return {
+        "in": getattr(u, "input_tokens", 0) or 0,
+        "out": getattr(u, "output_tokens", 0) or 0,
+        "searches": searches,
+    }
+
+
+_ZERO_USAGE = {"in": 0, "out": 0, "searches": 0}
+
+
 def _create_with_retry(client, max_attempts=4, **kwargs):
     """Call the Messages API, retrying on rate limits and transient server
     errors with a wait. This is a once-a-day batch job, so waiting ~30-60s to
@@ -273,7 +297,8 @@ def generate_section(client, topic, date_str):
     except Exception as exc:  # noqa: BLE001 — we want to degrade gracefully
         logger.error("Topic '%s' API call failed: %s", topic["title"], exc)
         text = header + "\n- News for this topic is unavailable today (the request failed)."
-        return {"title": topic["title"], "header": header, "text": text, "search_ok": False}
+        return {"title": topic["title"], "header": header, "text": text,
+                "search_ok": False, "usage": dict(_ZERO_USAGE)}
 
     text, searches, errors = _parse_response(response)
     search_ok = searches > 0 and not errors
@@ -291,7 +316,8 @@ def generate_section(client, topic, date_str):
         # Keep whatever Claude wrote but flag that it is not freshly sourced.
         text = text + "\n- (Note: live web results were unavailable for this topic, so the above may not be current.)"
 
-    return {"title": topic["title"], "header": header, "text": text, "search_ok": search_ok}
+    return {"title": topic["title"], "header": header, "text": text,
+            "search_ok": search_ok, "usage": _usage_of(response)}
 
 
 # --------------------------------------------------------------------------- #
@@ -322,11 +348,12 @@ def generate_closing(client, brief_text, date_str):
         )
         text, _, _ = _parse_response(response)
         if text:
-            return text.strip()
+            return text.strip(), _usage_of(response)
     except Exception as exc:  # noqa: BLE001
         logger.error("Closing-question call failed: %s", exc)
 
-    return "Today's question: What is the one small change you can make today that compounds across your work, money, and sleep?"
+    fallback = "Today's question: What is the one small change you can make today that compounds across your work, money, and sleep?"
+    return fallback, dict(_ZERO_USAGE)
 
 
 # --------------------------------------------------------------------------- #
@@ -404,11 +431,26 @@ def run():
         sections.append(generate_section(client, topic, date_str))
 
     interim = "\n\n".join(s["text"] for s in sections)
-    closing = generate_closing(client, interim, date_str)
+    closing, closing_usage = generate_closing(client, interim, date_str)
 
     main_text = build_main_text(sections, closing, now_london)
 
     txt_path, feed_path = write_outputs(main_text, now_london, now_utc)
+
+    # Tally usage and estimate the run's cost.
+    usages = [s["usage"] for s in sections] + [closing_usage]
+    tot_in = sum(u["in"] for u in usages)
+    tot_out = sum(u["out"] for u in usages)
+    tot_searches = sum(u["searches"] for u in usages)
+    cost_usd = (
+        tot_in / 1_000_000 * PRICE_INPUT_PER_M
+        + tot_out / 1_000_000 * PRICE_OUTPUT_PER_M
+        + tot_searches * PRICE_PER_SEARCH
+    )
+    logger.info(
+        "Usage: %s input + %s output tokens, %d web searches  ~  est. cost $%.3f (~%.0fp)",
+        f"{tot_in:,}", f"{tot_out:,}", tot_searches, cost_usd, cost_usd * USD_TO_GBP * 100,
+    )
 
     ok = sum(1 for s in sections if s["search_ok"])
     word_count = len(main_text.split())
