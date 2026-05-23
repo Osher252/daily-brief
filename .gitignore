@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Generated briefs and logs
+output/*.json
+output/*.txt
+output/*.log
+!output/.gitkeep
