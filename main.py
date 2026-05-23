@@ -51,10 +51,12 @@ MAX_MAINTEXT_CHARS = 4400
 LONDON = ZoneInfo("Europe/London")
 
 # Server-side web search tool. The type string is the released version id.
+# max_uses caps searches per topic — 3 is plenty for 3 bullets and keeps the
+# per-run cost down (web search is billed per search plus the result tokens).
 WEB_SEARCH_TOOL = {
     "type": "web_search_20250305",
     "name": "web_search",
-    "max_uses": 5,
+    "max_uses": 3,
 }
 
 # --------------------------------------------------------------------------- #

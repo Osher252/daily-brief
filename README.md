@@ -163,13 +163,18 @@ The feed served at `/alexa-brief` is a single Flash Briefing item:
   "updateDate": "2026-05-23T06:00:00.0Z",
   "titleText": "Your Daily Brief",
   "mainText": "Good morning. Here is your daily brief...",
-  "redirectionUrl": ""
+  "redirectionUrl": "https://osher252.github.io/daily-brief/"
 }
 ```
 
 - `updateDate` is UTC in ISO 8601 (Alexa shows newer items first).
-- Amazon prefers a real HTTPS `redirectionUrl` (the "Read more" link). It is
-  empty here per spec; if validation complains, set it to any valid HTTPS URL.
+- `redirectionUrl` **must be a valid, absolute https URL** — Alexa rejects an
+  empty string. It defaults to the GitHub Pages site; override with the
+  `BRIEF_REDIRECT_URL` environment variable.
+- `mainText` for a text item **must be 4500 characters or fewer** — Alexa
+  rejects longer items. `main.py` keeps each topic to 3 short bullets and
+  hard-trims the body to a sentence boundary under `MAX_MAINTEXT_CHARS` (4400)
+  as a safety net.
 - If your skill insists on a list feed, change the last line of `server.py` to
   `return JSONResponse([data])`.
 
