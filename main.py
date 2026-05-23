@@ -40,6 +40,14 @@ load_dotenv(BASE_DIR / ".env")
 # `or` (not a default arg) so an empty BRIEF_MODEL="" still falls back correctly.
 MODEL = os.getenv("BRIEF_MODEL") or "claude-sonnet-4-6"
 
+# Alexa Flash Briefing requires a valid, absolute https URL here — an empty
+# string is rejected. Points at the GitHub Pages site that hosts the feed.
+REDIRECT_URL = os.getenv("BRIEF_REDIRECT_URL") or "https://osher252.github.io/daily-brief/"
+
+# Alexa caps a text item's mainText at 4500 characters. We aim well under and
+# hard-trim as a safety net so the feed can never be rejected for length.
+MAX_MAINTEXT_CHARS = 4400
+
 LONDON = ZoneInfo("Europe/London")
 
 # Server-side web search tool. The type string is the released version id.
@@ -243,11 +251,12 @@ def generate_section(client, topic, date_str):
         "Focus: {focus}\n\n"
         "Format the section exactly like this:\n"
         "- First line: the header exactly as: {header}\n"
-        "- Then 3 to 5 dash-prefixed bullet points. Each bullet is one sentence "
-        "carrying one fact plus its implication, with a specific number, named "
-        "company, named person or named product.\n\n"
-        "Keep the whole section under 90 words. Plain text only. Start with the "
-        "header line. No preamble and no sign-off."
+        "- Then exactly 3 dash-prefixed bullet points. Each bullet is ONE short "
+        "sentence carrying one fact plus its implication, with a specific number, "
+        "named company, named person or named product.\n\n"
+        "Keep the whole section under 60 words (this is a hard limit — Alexa has "
+        "a strict length cap). Plain text only. Start with the header line. "
+        "No preamble and no sign-off."
     ).format(title=topic["title"], focus=topic["focus"], header=header)
 
     try:
@@ -323,11 +332,34 @@ def generate_closing(client, brief_text, date_str):
 # --------------------------------------------------------------------------- #
 
 
+def _trim_to_sentence(text, budget):
+    """Trim text to at most `budget` characters, cutting at the last sentence
+    or line boundary so it never ends mid-word."""
+    if len(text) <= budget:
+        return text
+    cut = text[:budget]
+    pos = max(cut.rfind(s) for s in ("\n", ". ", "? ", "! ", ".", "?", "!"))
+    if pos > 0:
+        cut = cut[: pos + 1]
+    return cut.rstrip()
+
+
 def build_main_text(sections, closing, now_london):
     greeting = "Good morning. Here is your daily brief for {d}.".format(
         d=now_london.strftime("%A %-d %B %Y")
     )
     body = "\n\n".join(s["text"] for s in sections)
+    full = greeting + "\n\n" + body + "\n\n" + closing
+    if len(full) <= MAX_MAINTEXT_CHARS:
+        return full
+
+    # Over Alexa's limit — keep the greeting and closing, trim the body to fit.
+    reserve = len(greeting) + len(closing) + 4  # 4 for the two "\n\n" joins
+    body = _trim_to_sentence(body, MAX_MAINTEXT_CHARS - reserve)
+    logger.warning(
+        "Brief exceeded %d chars; trimmed the body to fit Alexa's limit.",
+        MAX_MAINTEXT_CHARS,
+    )
     return greeting + "\n\n" + body + "\n\n" + closing
 
 
@@ -342,7 +374,7 @@ def write_outputs(main_text, now_london, now_utc):
         "updateDate": now_utc.strftime("%Y-%m-%dT%H:%M:%S.0Z"),
         "titleText": "Your Daily Brief",
         "mainText": main_text,
-        "redirectionUrl": "",
+        "redirectionUrl": REDIRECT_URL,
     }
     feed_path = OUTPUT_DIR / "alexa_feed.json"
     feed_path.write_text(json.dumps(feed, ensure_ascii=False, indent=2), encoding="utf-8")
