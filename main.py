@@ -17,6 +17,7 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -556,6 +557,12 @@ def send_email(subject, html_body):
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             logger.info("Email sent to %s (HTTP %s).", EMAIL_TO, resp.status)
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read().decode("utf-8")
+        except Exception:  # noqa: BLE001
+            detail = ""
+        logger.error("Email send failed: HTTP %s — %s", exc.code, detail)
     except Exception as exc:  # noqa: BLE001 — email failure must not fail the run
         logger.error("Email send failed: %s", exc)
 
