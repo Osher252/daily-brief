@@ -1,0 +1,19 @@
+name: Email Test
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Send a test email and print Resend's response
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          BRIEF_EMAIL_FROM: ${{ vars.BRIEF_EMAIL_FROM }}
+          BRIEF_EMAIL_TO: ${{ vars.BRIEF_EMAIL_TO }}
+        run: python email_test.py
