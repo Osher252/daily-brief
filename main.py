@@ -17,6 +17,7 @@ import os
 import re
 import sys
 import time
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -61,6 +62,11 @@ PRICING = {
 PRICE_INPUT_PER_M, PRICE_OUTPUT_PER_M = PRICING.get(MODEL, (1.0, 5.0))
 PRICE_PER_SEARCH = 0.01    # web search, $10 per 1,000 searches (model-independent)
 USD_TO_GBP = 0.79          # rough, for a friendly pence figure in the log
+
+# Optional daily email of the FULL brief via Resend. Set RESEND_API_KEY to
+# enable (no-op if unset). Recipient/sender can be overridden via env.
+EMAIL_TO = os.getenv("BRIEF_EMAIL_TO") or "imjohnny252@gmail.com"
+EMAIL_FROM = os.getenv("BRIEF_EMAIL_FROM") or "Daily Brief <onboarding@resend.dev>"
 
 LONDON = ZoneInfo("Europe/London")
 
@@ -503,6 +509,57 @@ def build_html(sections, closing, now_london):
     )
 
 
+def build_email_html(sections, closing, now_london):
+    """Full brief as an email body with inline styles (robust across clients)."""
+    date_str = now_london.strftime("%A %-d %B %Y")
+    p = ['<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;'
+         'max-width:640px;margin:0 auto;color:#1c1c1e;line-height:1.5;">']
+    p.append('<h1 style="font-size:20px;margin:0 0 2px;">Your Daily Brief</h1>')
+    p.append('<p style="color:#666;margin:0 0 20px;font-size:14px;">{}</p>'.format(
+        html.escape(date_str)))
+    for s in sections:
+        lines = [ln.strip() for ln in s["text"].split("\n") if ln.strip()]
+        header = lines[0] if lines else s["title"]
+        p.append('<h2 style="font-size:16px;margin:18px 0 6px;">{}</h2>'.format(
+            html.escape(header)))
+        p.append('<ul style="margin:0;padding-left:18px;">')
+        for ln in lines[1:]:
+            b = ln[2:].strip() if ln.startswith("- ") else ln
+            p.append('<li style="margin:0 0 6px;">{}</li>'.format(html.escape(b)))
+        p.append('</ul>')
+    p.append('<p style="margin-top:24px;padding:12px 14px;background:#f4f6f8;'
+             'border-radius:10px;font-weight:600;">{}</p>'.format(html.escape(closing)))
+    p.append('<p style="color:#999;font-size:12px;margin-top:24px;">'
+             'Full brief online: https://osher252.github.io/daily-brief/</p>')
+    p.append('</div>')
+    return "\n".join(p)
+
+
+def send_email(subject, html_body):
+    """Email the brief via Resend. No-op if RESEND_API_KEY isn't set."""
+    key = os.getenv("RESEND_API_KEY")
+    if not key:
+        logger.info("RESEND_API_KEY not set; skipping email.")
+        return
+    payload = json.dumps({
+        "from": EMAIL_FROM,
+        "to": [EMAIL_TO],
+        "subject": subject,
+        "html": html_body,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=payload,
+        headers={"Authorization": "Bearer " + key,
+                 "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            logger.info("Email sent to %s (HTTP %s).", EMAIL_TO, resp.status)
+    except Exception as exc:  # noqa: BLE001 — email failure must not fail the run
+        logger.error("Email send failed: %s", exc)
+
+
 def write_outputs(short_text, full_text, sections, closing, now_london, now_utc):
     date_compact = now_london.strftime("%Y%m%d")
 
@@ -553,6 +610,12 @@ def run():
 
     txt_path, feed_path, html_path = write_outputs(
         short_text, full_text, sections, closing, now_london, now_utc
+    )
+
+    # Email the full brief (no-op unless RESEND_API_KEY is set).
+    send_email(
+        "Your Daily Brief — {}".format(date_str),
+        build_email_html(sections, closing, now_london),
     )
 
     # Tally usage and estimate the run's cost.

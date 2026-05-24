@@ -53,6 +53,7 @@ jobs:
       - name: Generate the brief
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
         run: python main.py
 
       - name: Publish the feed and web page (GitHub Pages serves docs/)
