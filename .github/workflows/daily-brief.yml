@@ -62,6 +62,7 @@ jobs:
       - name: Stitch + transcode audio to Alexa's spec (mono, 24 kHz, 48 kbps)
         run: |
           if [ -f output/segments.txt ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
             (cd output && ffmpeg -y -f concat -safe 0 -i segments.txt \
                  -ac 1 -ar 24000 -b:a 48k -codec:a libmp3lame brief.mp3)
             ls -la output/brief.mp3
