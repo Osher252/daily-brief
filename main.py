@@ -77,7 +77,10 @@ _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 # built-in voices). Set OPENAI_API_KEY to enable. main.py writes the raw MP3;
 # the workflow transcodes it to Alexa's audio spec and publishes it.
 OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL") or "gpt-4o-mini-tts"
-OPENAI_TTS_VOICE = os.getenv("OPENAI_TTS_VOICE") or "nova"
+OPENAI_TTS_VOICE = os.getenv("OPENAI_TTS_VOICE") or "shimmer"
+# Voices to alternate per segment (greeting, each headline, closing). One name
+# = single voice; two+ = they trade off line by line (two-presenter feel).
+OPENAI_TTS_VOICES = os.getenv("OPENAI_TTS_VOICES") or "shimmer,ash"
 OPENAI_TTS_INSTRUCTIONS = (os.getenv("OPENAI_TTS_INSTRUCTIONS") or
     "Speak like a warm, upbeat morning news presenter: energetic and friendly, "
     "smooth and natural, with lively but clear pacing.")
@@ -584,17 +587,11 @@ def send_email(subject, html_body):
         logger.error("Email send failed: %s", exc)
 
 
-def generate_audio(text, out_path):
-    """Generate an MP3 of `text` with OpenAI TTS. Returns True on success.
-    No-op (returns False) if OPENAI_API_KEY isn't set — the skill then falls
-    back to Alexa's built-in voice."""
-    key = os.getenv("OPENAI_API_KEY")
-    if not key:
-        logger.info("OPENAI_API_KEY not set; skipping audio generation.")
-        return False
+def _tts(text, voice, out_path, key):
+    """One OpenAI TTS call -> MP3 file. Raises on failure."""
     payload = json.dumps({
         "model": OPENAI_TTS_MODEL,
-        "voice": OPENAI_TTS_VOICE,
+        "voice": voice,
         "input": text,
         "instructions": OPENAI_TTS_INSTRUCTIONS,
         "response_format": "mp3",
@@ -606,21 +603,49 @@ def generate_audio(text, out_path):
                  "Content-Type": "application/json",
                  "User-Agent": _UA},
     )
-    try:
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            audio = resp.read()
-        out_path.write_bytes(audio)
-        logger.info("Audio generated: %s (%d KB).", out_path.name, len(audio) // 1024)
-        return True
-    except urllib.error.HTTPError as exc:
+    with urllib.request.urlopen(req, timeout=90) as resp:
+        out_path.write_bytes(resp.read())
+
+
+def generate_audio_segments(text):
+    """Generate one MP3 per segment of `text`, alternating across the voices in
+    OPENAI_TTS_VOICES, plus an ffmpeg concat list (output/segments.txt). The
+    workflow stitches + transcodes them into brief.mp3. Returns True on success;
+    no-op (False) if OPENAI_API_KEY isn't set, so the skill falls back to text."""
+    key = os.getenv("OPENAI_API_KEY")
+    if not key:
+        logger.info("OPENAI_API_KEY not set; skipping audio generation.")
+        return False
+
+    voices = [v.strip() for v in OPENAI_TTS_VOICES.split(",") if v.strip()] or [OPENAI_TTS_VOICE]
+    segments = [s.strip() for s in text.split("\n\n") if s.strip()]
+
+    # Clear any stale segment files (matters for local re-runs).
+    for old in list(OUTPUT_DIR.glob("seg_*.mp3")) + list(OUTPUT_DIR.glob("segments.txt")):
+        old.unlink()
+
+    manifest = []
+    for i, seg in enumerate(segments):
+        voice = voices[i % len(voices)]
+        out = OUTPUT_DIR / "seg_{:03d}.mp3".format(i)
         try:
-            detail = exc.read().decode("utf-8")[:300]
-        except Exception:  # noqa: BLE001
-            detail = ""
-        logger.error("Audio generation failed: HTTP %s — %s", exc.code, detail)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Audio generation failed: %s", exc)
-    return False
+            _tts(seg, voice, out, key)
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = exc.read().decode("utf-8")[:300]
+            except Exception:  # noqa: BLE001
+                detail = ""
+            logger.error("TTS failed (segment %d, %s): HTTP %s — %s", i, voice, exc.code, detail)
+            return False
+        except Exception as exc:  # noqa: BLE001
+            logger.error("TTS failed (segment %d, %s): %s", i, voice, exc)
+            return False
+        manifest.append("file '{}'".format(out.name))
+        logger.info("TTS segment %d/%d (voice=%s).", i + 1, len(segments), voice)
+
+    (OUTPUT_DIR / "segments.txt").write_text("\n".join(manifest) + "\n", encoding="utf-8")
+    logger.info("Audio: %d segments alternating voices %s.", len(segments), voices)
+    return True
 
 
 def write_outputs(short_text, full_text, sections, closing, audio_url, now_london, now_utc):
@@ -672,9 +697,9 @@ def run():
     full_text = build_main_text(sections, closing, now_london)
     short_text = build_short_text(sections, closing, now_london)
 
-    # Generate a smooth spoken MP3 (OpenAI TTS) of the short brief. The workflow
-    # transcodes output/brief_raw.mp3 -> brief.mp3 and publishes it.
-    audio_ok = generate_audio(short_text, OUTPUT_DIR / "brief_raw.mp3")
+    # Generate smooth spoken audio (OpenAI TTS), alternating voices per segment.
+    # The workflow stitches + transcodes the segments into brief.mp3.
+    audio_ok = generate_audio_segments(short_text)
     audio_url = ""
     if audio_ok:
         # Versioned query so Alexa fetches the fresh clip each run (no caching).

@@ -59,14 +59,14 @@ jobs:
           BRIEF_EMAIL_TO: ${{ vars.BRIEF_EMAIL_TO }}
         run: python main.py
 
-      - name: Transcode audio to Alexa's spec (mono, 24 kHz, 48 kbps)
+      - name: Stitch + transcode audio to Alexa's spec (mono, 24 kHz, 48 kbps)
         run: |
-          if [ -f output/brief_raw.mp3 ]; then
-            ffmpeg -y -i output/brief_raw.mp3 -ac 1 -ar 24000 -b:a 48k \
-                   -codec:a libmp3lame output/brief.mp3
+          if [ -f output/segments.txt ]; then
+            (cd output && ffmpeg -y -f concat -safe 0 -i segments.txt \
+                 -ac 1 -ar 24000 -b:a 48k -codec:a libmp3lame brief.mp3)
             ls -la output/brief.mp3
           else
-            echo "No audio produced (OPENAI_API_KEY not set?); skipping transcode."
+            echo "No audio segments (OPENAI_API_KEY not set?); skipping."
           fi
 
       - name: Publish the feed, web page and audio (GitHub Pages serves docs/)
