@@ -1,14 +1,21 @@
 """
-Alexa custom skill handler for "my daily brief".
+Alexa custom skill handler for "the lowdown" / "my daily brief".
 
 Paste this into the Code tab (lambda_function.py) of an Alexa-hosted (Python)
-custom skill, then Save + Deploy. Saying "Alexa, open my daily brief" makes
-Alexa read the latest brief from the GitHub Pages feed.
+custom skill, then Save + Deploy. Saying "Alexa, open the lowdown" makes Alexa
+read the latest brief from the GitHub Pages feed.
+
+Voice: uses a natural British neural voice with a newscaster delivery so it
+doesn't sound robotic. Change VOICE / USE_NEWS_STYLE below to taste:
+  British female: "Amy"   British male: "Arthur" or "Brian"
+  US conversational vibe: set VOICE="Matthew" or "Joanna" and USE_NEWS_STYLE
+  can stay True (newscaster) — those two also support a "conversational" style.
 
 The Alexa-hosted Python environment already includes ask-sdk-core, so no extra
-packages are needed. urllib / json / re are part of the standard library.
+packages are needed. urllib / json / re / html are part of the standard library.
 """
 
+import html
 import json
 import logging
 import re
@@ -24,21 +31,25 @@ from ask_sdk_core.dispatch_components import (
 # The public feed produced by the daily GitHub Action.
 FEED_URL = "https://osher252.github.io/daily-brief/alexa_feed.json"
 
+# --- Voice / delivery settings -------------------------------------------- #
+VOICE = "Amy"           # natural British (neural) voice
+USE_NEWS_STYLE = True   # newscaster delivery — engaging, less robotic
+# -------------------------------------------------------------------------- #
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
 def get_brief_text():
-    """Fetch the brief and clean it for text-to-speech."""
+    """Fetch the brief as plain text (emojis removed, newlines kept)."""
     try:
         req = urllib.request.Request(FEED_URL, headers={"User-Agent": "alexa-skill"})
         with urllib.request.urlopen(req, timeout=8) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         text = data.get("mainText", "")
-        # Remove emojis / any non-ASCII so Alexa doesn't read them aloud.
-        text = re.sub(r"[^\x00-\x7f]", "", text)
+        text = re.sub(r"[^\x00-\x7f]", "", text)   # drop emojis / non-ASCII
         text = text.replace("&", " and ")
-        text = re.sub(r"[ \t]+", " ", text).strip()
+        text = re.sub(r"[ \t]+", " ", text).strip()  # tidy spaces, keep newlines
         return text or "Your daily brief is empty right now."
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to fetch brief: %s", exc)
@@ -46,24 +57,39 @@ def get_brief_text():
                 "Please try again in a little while.")
 
 
+def to_speech(text):
+    """Wrap the brief in SSML: a natural voice, newscaster style, and pauses
+    between sections so it reads like a presenter rather than a robot."""
+    blocks = [b.strip() for b in text.split("\n\n") if b.strip()]
+    rendered = []
+    for block in blocks:
+        lines = [html.escape(ln.strip(), quote=False)
+                 for ln in block.split("\n") if ln.strip()]
+        rendered.append(' <break time="300ms"/> '.join(lines))
+    body = ' <break time="650ms"/> '.join(rendered) or html.escape(text, quote=False)
+
+    if USE_NEWS_STYLE:
+        body = '<amazon:domain name="news">' + body + '</amazon:domain>'
+    return '<voice name="' + VOICE + '">' + body + '</voice>'
+
+
 class LaunchRequestHandler(AbstractRequestHandler):
-    """'Alexa, open my daily brief' -> read the brief, then end."""
+    """'Alexa, open the lowdown' -> read the brief, then end."""
 
     def can_handle(self, handler_input):
         return ask_utils.is_request_type("LaunchRequest")(handler_input)
 
     def handle(self, handler_input):
-        speech = get_brief_text()
         return (
             handler_input.response_builder
-            .speak(speech)
+            .speak(to_speech(get_brief_text()))
             .set_should_end_session(True)
             .response
         )
 
 
 class ReadAgainIntentHandler(AbstractRequestHandler):
-    """Also read the brief for navigate-home / fallback so it 'just works'."""
+    """Read the brief for repeat / navigate-home / fallback too."""
 
     def can_handle(self, handler_input):
         return (
@@ -75,7 +101,7 @@ class ReadAgainIntentHandler(AbstractRequestHandler):
     def handle(self, handler_input):
         return (
             handler_input.response_builder
-            .speak(get_brief_text())
+            .speak(to_speech(get_brief_text()))
             .set_should_end_session(True)
             .response
         )
@@ -86,7 +112,7 @@ class HelpIntentHandler(AbstractRequestHandler):
         return ask_utils.is_intent_name("AMAZON.HelpIntent")(handler_input)
 
     def handle(self, handler_input):
-        speech = "Just say, open my daily brief, to hear today's news."
+        speech = "Just say, open the lowdown, to hear today's news."
         return handler_input.response_builder.speak(speech).ask(speech).response
 
 
