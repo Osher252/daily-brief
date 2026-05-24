@@ -45,21 +45,35 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-def get_brief_text():
-    """Fetch the brief as plain text (emojis removed, newlines kept)."""
+def get_feed():
+    """Fetch the feed JSON. Returns {} on failure."""
     try:
         req = urllib.request.Request(FEED_URL, headers={"User-Agent": "alexa-skill"})
         with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        text = data.get("mainText", "")
-        text = re.sub(r"[^\x00-\x7f]", "", text)   # drop emojis / non-ASCII
-        text = text.replace("&", " and ")
-        text = re.sub(r"[ \t]+", " ", text).strip()  # tidy spaces, keep newlines
-        return text or "Your daily brief is empty right now."
+            return json.loads(resp.read().decode("utf-8"))
     except Exception as exc:  # noqa: BLE001
-        logger.error("Failed to fetch brief: %s", exc)
-        return ("Sorry, I couldn't fetch your daily brief right now. "
+        logger.error("Failed to fetch feed: %s", exc)
+        return {}
+
+
+def _clean(text):
+    text = re.sub(r"[^\x00-\x7f]", "", text)      # drop emojis / non-ASCII
+    text = text.replace("&", " and ")
+    return re.sub(r"[ \t]+", " ", text).strip()   # tidy spaces, keep newlines
+
+
+def get_speech():
+    """Prefer the pre-generated MP3 (smooth OpenAI voice). Fall back to Alexa's
+    built-in voice reading the text if no audio is available."""
+    feed = get_feed()
+    audio = (feed.get("audioUrl") or "").strip()
+    if audio:
+        return '<audio src="{}"/>'.format(html.escape(audio, quote=True))
+    text = _clean(feed.get("mainText", ""))
+    if not text:
+        text = ("Sorry, I couldn't fetch your daily brief right now. "
                 "Please try again in a little while.")
+    return to_speech(text)
 
 
 def to_speech(text):
@@ -90,7 +104,7 @@ class LaunchRequestHandler(AbstractRequestHandler):
     def handle(self, handler_input):
         return (
             handler_input.response_builder
-            .speak(to_speech(get_brief_text()))
+            .speak(get_speech())
             .set_should_end_session(True)
             .response
         )
@@ -109,7 +123,7 @@ class ReadAgainIntentHandler(AbstractRequestHandler):
     def handle(self, handler_input):
         return (
             handler_input.response_builder
-            .speak(to_speech(get_brief_text()))
+            .speak(get_speech())
             .set_should_end_session(True)
             .response
         )

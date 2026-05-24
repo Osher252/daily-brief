@@ -69,6 +69,20 @@ USD_TO_GBP = 0.79          # rough, for a friendly pence figure in the log
 EMAIL_TO = os.getenv("BRIEF_EMAIL_TO") or "imjohnny252@gmail.com"
 EMAIL_FROM = os.getenv("BRIEF_EMAIL_FROM") or "Daily Brief <onboarding@resend.dev>"
 
+# A real browser UA — Cloudflare/WAFs block the default urllib agent (err 1010).
+_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+
+# Optional smooth spoken audio via OpenAI TTS (far less robotic than Alexa's
+# built-in voices). Set OPENAI_API_KEY to enable. main.py writes the raw MP3;
+# the workflow transcodes it to Alexa's audio spec and publishes it.
+OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL") or "gpt-4o-mini-tts"
+OPENAI_TTS_VOICE = os.getenv("OPENAI_TTS_VOICE") or "nova"
+OPENAI_TTS_INSTRUCTIONS = (os.getenv("OPENAI_TTS_INSTRUCTIONS") or
+    "Speak like a warm, upbeat morning news presenter: energetic and friendly, "
+    "smooth and natural, with lively but clear pacing.")
+AUDIO_FILE = "brief.mp3"  # published filename on the web page
+
 LONDON = ZoneInfo("Europe/London")
 
 # Server-side web search tool. The type string is the released version id.
@@ -554,10 +568,7 @@ def send_email(subject, html_body):
         headers={
             "Authorization": "Bearer " + key,
             "Content-Type": "application/json",
-            # A real UA — Cloudflare blocks the default urllib agent (error 1010).
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) "
-                          "Chrome/124.0.0.0 Safari/537.36",
+            "User-Agent": _UA,
         },
     )
     try:
@@ -573,7 +584,46 @@ def send_email(subject, html_body):
         logger.error("Email send failed: %s", exc)
 
 
-def write_outputs(short_text, full_text, sections, closing, now_london, now_utc):
+def generate_audio(text, out_path):
+    """Generate an MP3 of `text` with OpenAI TTS. Returns True on success.
+    No-op (returns False) if OPENAI_API_KEY isn't set — the skill then falls
+    back to Alexa's built-in voice."""
+    key = os.getenv("OPENAI_API_KEY")
+    if not key:
+        logger.info("OPENAI_API_KEY not set; skipping audio generation.")
+        return False
+    payload = json.dumps({
+        "model": OPENAI_TTS_MODEL,
+        "voice": OPENAI_TTS_VOICE,
+        "input": text,
+        "instructions": OPENAI_TTS_INSTRUCTIONS,
+        "response_format": "mp3",
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/audio/speech",
+        data=payload,
+        headers={"Authorization": "Bearer " + key,
+                 "Content-Type": "application/json",
+                 "User-Agent": _UA},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            audio = resp.read()
+        out_path.write_bytes(audio)
+        logger.info("Audio generated: %s (%d KB).", out_path.name, len(audio) // 1024)
+        return True
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read().decode("utf-8")[:300]
+        except Exception:  # noqa: BLE001
+            detail = ""
+        logger.error("Audio generation failed: HTTP %s — %s", exc.code, detail)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Audio generation failed: %s", exc)
+    return False
+
+
+def write_outputs(short_text, full_text, sections, closing, audio_url, now_london, now_utc):
     date_compact = now_london.strftime("%Y%m%d")
 
     txt_path = OUTPUT_DIR / "{d}_brief.txt".format(d=date_compact)
@@ -585,6 +635,7 @@ def write_outputs(short_text, full_text, sections, closing, now_london, now_utc)
         "titleText": "Your Daily Brief",
         "mainText": short_text,   # what Alexa speaks — short headlines
         "fullText": full_text,    # full detail (also rendered on the web page)
+        "audioUrl": audio_url,    # MP3 of the short brief (OpenAI TTS); "" if none
         "redirectionUrl": REDIRECT_URL,
     }
     feed_path = OUTPUT_DIR / "alexa_feed.json"
@@ -621,8 +672,19 @@ def run():
     full_text = build_main_text(sections, closing, now_london)
     short_text = build_short_text(sections, closing, now_london)
 
+    # Generate a smooth spoken MP3 (OpenAI TTS) of the short brief. The workflow
+    # transcodes output/brief_raw.mp3 -> brief.mp3 and publishes it.
+    audio_ok = generate_audio(short_text, OUTPUT_DIR / "brief_raw.mp3")
+    audio_url = ""
+    if audio_ok:
+        # Versioned query so Alexa fetches the fresh clip each run (no caching).
+        audio_url = "{base}/{f}?v={v}".format(
+            base=REDIRECT_URL.rstrip("/"), f=AUDIO_FILE,
+            v=now_london.strftime("%Y%m%d%H%M"),
+        )
+
     txt_path, feed_path, html_path = write_outputs(
-        short_text, full_text, sections, closing, now_london, now_utc
+        short_text, full_text, sections, closing, audio_url, now_london, now_utc
     )
 
     # Email the full brief (no-op unless RESEND_API_KEY is set).

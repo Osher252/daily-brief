@@ -54,21 +54,33 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           BRIEF_EMAIL_FROM: ${{ vars.BRIEF_EMAIL_FROM }}
           BRIEF_EMAIL_TO: ${{ vars.BRIEF_EMAIL_TO }}
         run: python main.py
 
-      - name: Publish the feed and web page (GitHub Pages serves docs/)
+      - name: Transcode audio to Alexa's spec (mono, 24 kHz, 48 kbps)
+        run: |
+          if [ -f output/brief_raw.mp3 ]; then
+            ffmpeg -y -i output/brief_raw.mp3 -ac 1 -ar 24000 -b:a 48k \
+                   -codec:a libmp3lame output/brief.mp3
+            ls -la output/brief.mp3
+          else
+            echo "No audio produced (OPENAI_API_KEY not set?); skipping transcode."
+          fi
+
+      - name: Publish the feed, web page and audio (GitHub Pages serves docs/)
         run: |
           mkdir -p docs
           cp output/alexa_feed.json docs/alexa_feed.json
           cp output/index.html docs/index.html
+          [ -f output/brief.mp3 ] && cp output/brief.mp3 docs/brief.mp3 || true
 
       - name: Commit the new brief
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/alexa_feed.json docs/index.html
+          git add docs
           if git diff --staged --quiet; then
             echo "No change in today's feed; nothing to commit."
           else
