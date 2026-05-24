@@ -32,10 +32,13 @@ from ask_sdk_core.dispatch_components import (
 FEED_URL = "https://osher252.github.io/daily-brief/alexa_feed.json"
 
 # --- Voice / delivery settings -------------------------------------------- #
-VOICE = "Joanna"             # US neural voice (supports the 'excited' emotion)
-EMOTION = "excited"          # "excited" / "disappointed" / "" to disable
-EMOTION_INTENSITY = "high"   # low | medium | high  (dial to "medium" if too much)
-USE_NEWS_STYLE = False       # newscaster (serious) — off; using emotion instead
+# Joanna/Matthew support the smoothest styles. "conversational" = relaxed and
+# natural (least robotic); "news" = newscaster; "" = plain. The 'excited'
+# emotion sounds forced/robotic, so it's off here in favour of conversational.
+VOICE = "Joanna"            # try "Matthew" for a male US voice
+STYLE = "conversational"    # "conversational" | "news" | ""  (smooth = conversational)
+EMOTION = ""                # "excited" / "disappointed" / "" — off
+EMOTION_INTENSITY = "medium"  # low | medium | high (only if EMOTION set)
 # -------------------------------------------------------------------------- #
 
 logger = logging.getLogger(__name__)
@@ -70,8 +73,8 @@ def to_speech(text):
         rendered.append(' <break time="300ms"/> '.join(lines))
     body = ' <break time="650ms"/> '.join(rendered) or html.escape(text, quote=False)
 
-    if USE_NEWS_STYLE:
-        body = '<amazon:domain name="news">' + body + '</amazon:domain>'
+    if STYLE:
+        body = '<amazon:domain name="' + STYLE + '">' + body + '</amazon:domain>'
     if EMOTION:
         body = ('<amazon:emotion name="' + EMOTION + '" intensity="'
                 + EMOTION_INTENSITY + '">' + body + '</amazon:emotion>')
