@@ -551,8 +551,14 @@ def send_email(subject, html_body):
     req = urllib.request.Request(
         "https://api.resend.com/emails",
         data=payload,
-        headers={"Authorization": "Bearer " + key,
-                 "Content-Type": "application/json"},
+        headers={
+            "Authorization": "Bearer " + key,
+            "Content-Type": "application/json",
+            # A real UA — Cloudflare blocks the default urllib agent (error 1010).
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/124.0.0.0 Safari/537.36",
+        },
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
