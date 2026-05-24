@@ -10,6 +10,7 @@ Run directly to generate today's brief:
     python main.py
 """
 
+import html
 import json
 import logging
 import os
@@ -281,14 +282,13 @@ def generate_section(client, topic, date_str):
     user_message = (
         "Write the \"{title}\" section of today's brief.\n"
         "Focus: {focus}\n\n"
-        "Format the section exactly like this:\n"
-        "- First line: the header exactly as: {header}\n"
-        "- Then exactly 3 dash-prefixed bullet points. Each bullet is ONE short "
-        "sentence carrying one fact plus its implication, with a specific number, "
-        "named company, named person or named product.\n\n"
-        "Keep the whole section under 60 words (this is a hard limit — Alexa has "
-        "a strict length cap). Plain text only. Start with the header line. "
-        "No preamble and no sign-off."
+        "Output exactly in this structure:\n"
+        "Line 1: the header exactly as: {header}\n"
+        "Line 2: HEADLINE: then ONE punchy sentence (under 16 words) capturing the "
+        "single biggest story for this topic, with a number or named entity.\n"
+        "Then exactly 3 dash-prefixed bullet points giving the fuller detail, each "
+        "one short sentence with a specific number, named company, person or product.\n\n"
+        "Plain text only. Start with the header line. No preamble and no sign-off."
     ).format(title=topic["title"], focus=topic["focus"], header=header)
 
     try:
@@ -304,7 +304,8 @@ def generate_section(client, topic, date_str):
         logger.error("Topic '%s' API call failed: %s", topic["title"], exc)
         text = header + "\n- News for this topic is unavailable today (the request failed)."
         return {"title": topic["title"], "header": header, "text": text,
-                "search_ok": False, "usage": dict(_ZERO_USAGE)}
+                "headline": "no fresh news today", "search_ok": False,
+                "usage": dict(_ZERO_USAGE)}
 
     text, searches, errors = _parse_response(response)
 
@@ -316,6 +317,25 @@ def generate_section(client, topic, date_str):
         text = text[idx:].strip()
     elif idx == -1 and text:
         text = header + "\n" + text  # model omitted the header; restore it
+
+    # Pull out the HEADLINE line (used for the short spoken brief) and keep the
+    # header + bullets as the full section body (used for the web page).
+    headline = ""
+    body_lines = []
+    for line in text.split("\n"):
+        s = line.strip()
+        if not s:
+            continue
+        if s.upper().startswith("HEADLINE:"):
+            headline = s.split(":", 1)[1].strip()
+        else:
+            body_lines.append(s)
+    text = "\n".join(body_lines)
+    if not headline:  # fallback: use the first bullet
+        for s in body_lines:
+            if s.startswith("- "):
+                headline = s[2:].strip()
+                break
 
     # 'max_uses_exceeded' is not a real failure — the searches that ran returned
     # results; the model merely asked for one more than the cap allows.
@@ -334,9 +354,11 @@ def generate_section(client, topic, date_str):
     elif not search_ok:
         # Keep whatever Claude wrote but flag that it is not freshly sourced.
         text = text + "\n- (Note: live web results were unavailable for this topic, so the above may not be current.)"
+    if not headline:
+        headline = "no fresh news today"
 
     return {"title": topic["title"], "header": header, "text": text,
-            "search_ok": search_ok, "usage": _usage_of(response)}
+            "headline": headline, "search_ok": search_ok, "usage": _usage_of(response)}
 
 
 # --------------------------------------------------------------------------- #
@@ -411,23 +433,97 @@ def build_main_text(sections, closing, now_london):
     return greeting + "\n\n" + body + "\n\n" + closing
 
 
-def write_outputs(main_text, now_london, now_utc):
+def build_short_text(sections, closing, now_london):
+    """The short spoken brief: greeting + one headline per topic + closing."""
+    greeting = "Good morning. Here are your headlines for {d}.".format(
+        d=now_london.strftime("%A %-d %B %Y")
+    )
+    parts = [greeting]
+    for s in sections:
+        headline = (s.get("headline") or "").strip().rstrip(".")
+        if headline:
+            parts.append("{}. {}.".format(s["title"], headline))
+    parts.append(closing)
+    return "\n\n".join(parts)
+
+
+HTML_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Your Daily Brief — {date}</title>
+<style>
+ body {{ font-family: -apple-system, system-ui, sans-serif; max-width: 42rem;
+        margin: 0 auto; padding: 1.5rem 1.1rem 4rem; line-height: 1.55;
+        color: #1c1c1e; background: #fff; }}
+ h1 {{ font-size: 1.5rem; margin: 0 0 .15rem; }}
+ .date {{ color: #666; margin: 0 0 1.6rem; font-size: .95rem; }}
+ section {{ margin: 0 0 1.7rem; }}
+ h2 {{ font-size: 1.15rem; margin: 0 0 .5rem; }}
+ ul {{ margin: 0; padding-left: 1.15rem; }}
+ li {{ margin: 0 0 .5rem; }}
+ .closing {{ margin-top: 2rem; padding: 1rem 1.1rem; background: #f4f6f8;
+            border-radius: 12px; font-weight: 600; }}
+ .foot {{ margin-top: 2.5rem; color: #999; font-size: .8rem; }}
+ @media (prefers-color-scheme: dark) {{
+   body {{ background: #000; color: #eee; }}
+   .closing {{ background: #1c1c1e; }}
+   .date, .foot {{ color: #888; }}
+ }}
+</style>
+</head>
+<body>
+<h1>Your Daily Brief</h1>
+<p class="date">{date}</p>
+{body}
+<p class="closing">{closing}</p>
+<p class="foot">Updated {updated}. Generated automatically each weekday.</p>
+</body>
+</html>
+"""
+
+
+def build_html(sections, closing, now_london):
+    blocks = []
+    for s in sections:
+        lines = [ln.strip() for ln in s["text"].split("\n") if ln.strip()]
+        header = lines[0] if lines else s["title"]
+        bullets = []
+        for ln in lines[1:]:
+            text = ln[2:].strip() if ln.startswith("- ") else ln
+            bullets.append("<li>{}</li>".format(html.escape(text)))
+        blocks.append("<section><h2>{}</h2><ul>{}</ul></section>".format(
+            html.escape(header), "".join(bullets)))
+    return HTML_TEMPLATE.format(
+        date=now_london.strftime("%A %-d %B %Y"),
+        body="\n".join(blocks),
+        closing=html.escape(closing),
+        updated=now_london.strftime("%H:%M %Z"),
+    )
+
+
+def write_outputs(short_text, full_text, sections, closing, now_london, now_utc):
     date_compact = now_london.strftime("%Y%m%d")
 
     txt_path = OUTPUT_DIR / "{d}_brief.txt".format(d=date_compact)
-    txt_path.write_text(main_text, encoding="utf-8")
+    txt_path.write_text(full_text, encoding="utf-8")
 
     feed = {
         "uid": "daily-brief-{d}".format(d=date_compact),
         "updateDate": now_utc.strftime("%Y-%m-%dT%H:%M:%S.0Z"),
         "titleText": "Your Daily Brief",
-        "mainText": main_text,
+        "mainText": short_text,   # what Alexa speaks — short headlines
+        "fullText": full_text,    # full detail (also rendered on the web page)
         "redirectionUrl": REDIRECT_URL,
     }
     feed_path = OUTPUT_DIR / "alexa_feed.json"
     feed_path.write_text(json.dumps(feed, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    return txt_path, feed_path
+    html_path = OUTPUT_DIR / "index.html"
+    html_path.write_text(build_html(sections, closing, now_london), encoding="utf-8")
+
+    return txt_path, feed_path, html_path
 
 
 def run():
@@ -452,9 +548,12 @@ def run():
     interim = "\n\n".join(s["text"] for s in sections)
     closing, closing_usage = generate_closing(client, interim, date_str)
 
-    main_text = build_main_text(sections, closing, now_london)
+    full_text = build_main_text(sections, closing, now_london)
+    short_text = build_short_text(sections, closing, now_london)
 
-    txt_path, feed_path = write_outputs(main_text, now_london, now_utc)
+    txt_path, feed_path, html_path = write_outputs(
+        short_text, full_text, sections, closing, now_london, now_utc
+    )
 
     # Tally usage and estimate the run's cost.
     usages = [s["usage"] for s in sections] + [closing_usage]
@@ -472,17 +571,19 @@ def run():
     )
 
     ok = sum(1 for s in sections if s["search_ok"])
-    word_count = len(main_text.split())
     logger.info(
-        "=== Run complete: %d/%d topics had live web results | %d words | %s | %s ===",
-        ok, len(sections), word_count, txt_path.name, feed_path.name,
+        "=== Run complete: %d/%d topics live | spoken %d words / full %d words | %s | %s | %s ===",
+        ok, len(sections), len(short_text.split()), len(full_text.split()),
+        txt_path.name, feed_path.name, html_path.name,
     )
 
-    print("\n" + "=" * 70)
-    print(main_text)
+    print("\n===== SPOKEN (Alexa) =====")
+    print(short_text)
+    print("\n===== FULL (web page) =====")
+    print(full_text)
     print("=" * 70 + "\n")
 
-    return main_text
+    return short_text
 
 
 if __name__ == "__main__":

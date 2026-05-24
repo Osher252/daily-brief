@@ -55,16 +55,17 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python main.py
 
-      - name: Publish the feed for the web (GitHub Pages serves docs/)
+      - name: Publish the feed and web page (GitHub Pages serves docs/)
         run: |
           mkdir -p docs
           cp output/alexa_feed.json docs/alexa_feed.json
+          cp output/index.html docs/index.html
 
       - name: Commit the new brief
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/alexa_feed.json
+          git add docs/alexa_feed.json docs/index.html
           if git diff --staged --quiet; then
             echo "No change in today's feed; nothing to commit."
           else
