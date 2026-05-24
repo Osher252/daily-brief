@@ -54,6 +54,8 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          BRIEF_EMAIL_FROM: ${{ vars.BRIEF_EMAIL_FROM }}
+          BRIEF_EMAIL_TO: ${{ vars.BRIEF_EMAIL_TO }}
         run: python main.py
 
       - name: Publish the feed and web page (GitHub Pages serves docs/)
