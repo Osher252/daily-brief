@@ -2,12 +2,12 @@ name: Daily Brief
 
 on:
   schedule:
-    # Weekdays only (Mon-Fri). GitHub's timer runs in UTC. London is UTC+1 in
-    # summer (BST) and UTC+0 in winter (GMT), so we fire at BOTH 06:00 and 07:00
-    # UTC. The "gate" job below then lets the real work run only when it is
-    # actually 07:00 in London — giving us one brief each weekday at 7am London,
-    # all year round. (06:00/07:00 UTC on Mon-Fri stays Mon-Fri in London.)
-    - cron: "0 6,7 * * 1-5"
+    # Fire several times in the morning (06-11 UTC = 07-12 BST / 06-11 GMT)
+    # because GitHub Actions' cron is often delayed by 30+ minutes under load
+    # — sometimes several hours. The gate job below dedupes by checking
+    # whether today's brief has already been committed, so we still get
+    # exactly ONE brief per weekday whenever GitHub actually fires.
+    - cron: "0 6-11 * * 1-5"
   workflow_dispatch: {}   # also lets you run it on demand from the Actions tab
 
 permissions:
@@ -23,15 +23,29 @@ jobs:
     outputs:
       run: ${{ steps.check.outputs.run }}
     steps:
+      - uses: actions/checkout@v4
       - id: check
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$(TZ=Europe/London date +%H)" = "07" ]; then
-            echo "It is 7am in London (or a manual run). Proceeding."
+          TODAY=$(TZ=Europe/London date +%Y-%m-%d)
+          DOW=$(TZ=Europe/London date +%u)
+          echo "Now (London): $(TZ=Europe/London date), weekday=$DOW"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual dispatch — running."
             echo "run=yes" >> "$GITHUB_OUTPUT"
-          else
-            echo "Not 7am in London ($(TZ=Europe/London date)). Skipping."
-            echo "run=no" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          if [ "$DOW" -gt 5 ]; then
+            echo "Weekend — skipping."
+            echo "run=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git log --pretty=%s -50 | grep -qE "^Daily brief ${TODAY}\$"; then
+            echo "Today's brief is already committed — skipping (dedupe)."
+            echo "run=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Weekday and no brief yet today — running."
+          echo "run=yes" >> "$GITHUB_OUTPUT"
 
   brief:
     needs: gate
