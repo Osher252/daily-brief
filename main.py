@@ -139,60 +139,72 @@ BASE_SYSTEM_PROMPT = (
 )
 
 # --------------------------------------------------------------------------- #
-# The six topics
+# Topic catalogue + per-weekday schedule
 # --------------------------------------------------------------------------- #
 
-TOPICS = [
-    {
+TOPIC_CATALOG = {
+    "ai": {
         "emoji": "\U0001F916",  # robot
         "title": "AI models and products",
-        "focus": (
-            "New model releases, benchmarks, agentic tools and developer "
-            "products relevant to someone building AI-powered products."
-        ),
+        "focus": ("New model releases, benchmarks, agentic tools and developer "
+                  "products relevant to someone building AI-powered products."),
     },
-    {
+    "finance": {
         "emoji": "\U0001F4B7",  # pound banknote
         "title": "UK personal finance",
-        "focus": (
-            "Savings rates, ISA changes, mortgage rates and Bank of England "
-            "moves. Name specific providers and products (for example Chase, "
-            "Trading 212, Atom, Nationwide) with their current rates."
-        ),
+        "focus": ("Savings rates, ISA changes, mortgage rates and Bank of England "
+                  "moves. Name specific providers and products (for example Chase, "
+                  "Trading 212, Atom, Nationwide) with their current rates."),
     },
-    {
+    "israel": {
         "emoji": "\U0001F1EE\U0001F1F1",  # Israel flag
         "title": "Israeli politics",
-        "focus": (
-            "The coalition, elections, Gaza, and diplomatic developments. "
-            "Name the politicians and parties involved."
-        ),
+        "focus": ("The coalition, elections, Gaza, and diplomatic developments. "
+                  "Name the politicians and parties involved."),
     },
-    {
+    "uk_politics": {
         "emoji": "\U0001F1EC\U0001F1E7",  # UK flag
         "title": "UK politics",
-        "focus": (
-            "Labour, Reform, Starmer or a successor, and anything touching "
-            "schools or London. Name the politicians and policies."
-        ),
+        "focus": ("Labour, Reform, Starmer or a successor, and anything touching "
+                  "schools or London. Name the politicians and policies."),
     },
-    {
-        "emoji": "\U0001F634",  # sleeping face
-        "title": "Sleep and wearables",
-        "focus": (
-            "Sleep research, new devices, REM and HRV science, and news from "
-            "Fitbit, Oura and Whoop."
-        ),
+    "gadgets": {
+        "emoji": "\U0001F4F1",  # mobile phone
+        "title": "Gadgets and tech",
+        "focus": ("Interesting consumer gadgets and tech hardware news — notable "
+                  "device launches, cool product releases and clever kit worth "
+                  "knowing about. Skip pure AI-model news (covered separately)."),
     },
-    {
+    "b2b": {
         "emoji": "\U0001F4C8",  # chart increasing
         "title": "B2B SaaS and go-to-market",
-        "focus": (
-            "Funding rounds, go-to-market strategy shifts, AI in sales, and "
-            "SaaS metrics. Name the companies and the numbers."
-        ),
+        "focus": ("Funding rounds, go-to-market strategy shifts, AI in sales, and "
+                  "SaaS metrics. Name the companies and the numbers."),
     },
-]
+}
+
+
+def select_topics(now_london):
+    """Pick today's topics by weekday (Mon=0 .. Fri=4):
+      - UK personal finance: Mondays only
+      - AI models and products: Fridays only
+      - B2B SaaS and go-to-market: Wednesdays only
+      - Politics: one per day, alternating Israel / UK every other calendar day
+      - Gadgets and tech: every day
+    """
+    weekday = now_london.weekday()
+    politics = "israel" if now_london.toordinal() % 2 == 0 else "uk_politics"
+
+    keys = []
+    if weekday == 0:          # Monday
+        keys.append("finance")
+    if weekday == 4:          # Friday
+        keys.append("ai")
+    keys.append(politics)
+    if weekday == 2:          # Wednesday
+        keys.append("b2b")
+    keys.append("gadgets")
+    return [TOPIC_CATALOG[k] for k in keys]
 
 
 # --------------------------------------------------------------------------- #
@@ -686,8 +698,10 @@ def run():
     logger.info("=== Run start: %s (Europe/London) | model=%s ===", date_str, MODEL)
     client = anthropic.Anthropic(api_key=api_key)
 
+    todays_topics = select_topics(now_london)
+    logger.info("Today's topics: %s", ", ".join(t["title"] for t in todays_topics))
     sections = []
-    for topic in TOPICS:
+    for topic in todays_topics:
         logger.info("Generating section: %s", topic["title"])
         sections.append(generate_section(client, topic, date_str))
 
