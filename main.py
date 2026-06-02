@@ -274,14 +274,16 @@ TOPIC_CATALOG = {
 
 
 def select_topics(now_london):
-    """Pick today's topics by weekday (Mon=0 .. Fri=4):
-      Mon: UK personal finance, Schools & education, Politics, Tech
-      Tue: Israeli tech, Politics, Tech
-      Wed: B2B SaaS, Verified research, Politics, Tech
-      Thu: Health, sleep & longevity, Politics, Tech
-      Fri: AI models, AI safety & policy, Politics, Tech
+    """Pick today's topics by weekday (Mon=0 .. Fri=4) — balanced so every
+    day has the same load: 3 sections + HN top-3 from run().
+      Mon: finance + schools + politics
+      Tue: israeli_tech + politics + tech (Techmeme as filler)
+      Wed: b2b + research + politics
+      Thu: health + politics + tech (Techmeme as filler)
+      Fri: ai + ai_safety + politics
     Politics alternates Israel / UK every other calendar day.
-    Tech (Techmeme) runs daily. HN top 3 is appended in run().
+    Tech (Techmeme) only runs on the days that have one specialty topic,
+    so the daily section count stays flat.
     """
     weekday = now_london.weekday()
     politics = "israel" if now_london.toordinal() % 2 == 0 else "uk_politics"
@@ -301,7 +303,8 @@ def select_topics(now_london):
         keys.append("ai")
         keys.append("ai_safety")
     keys.append(politics)
-    keys.append("tech")
+    if weekday in (1, 3):     # Tech (Techmeme) only on light days
+        keys.append("tech")
     return [TOPIC_CATALOG[k] for k in keys]
 
 
