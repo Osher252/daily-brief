@@ -68,7 +68,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}   # voice off — skill falls back to text
           BRIEF_EMAIL_FROM: ${{ vars.BRIEF_EMAIL_FROM }}
           BRIEF_EMAIL_TO: ${{ vars.BRIEF_EMAIL_TO }}
         run: python main.py
