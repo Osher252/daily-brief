@@ -210,16 +210,78 @@ TOPIC_CATALOG = {
             {"name": "TechCrunch Startups", "url": "https://techcrunch.com/category/startups/feed/"},
         ],
     },
+    "israeli_tech": {
+        "emoji": "\U0001F680",  # rocket
+        "title": "Israeli tech",
+        "focus": ("Israeli startups, scale-ups, exits, funding rounds and "
+                  "UK / global expansion stories. Name founders, companies, "
+                  "deal sizes."),
+        "feeds": [
+            {"name": "NoCamels",        "url": "https://nocamels.com/feed/"},
+            {"name": "TechCrunch Israel","url": "https://techcrunch.com/tag/israel/feed/"},
+        ],
+    },
+    "ai_safety": {
+        "emoji": "\U0001F6E1️",  # shield
+        "title": "AI safety & policy",
+        "focus": ("AI safety, model evaluations, alignment, the EU AI Act, UK "
+                  "AI policy, US AI executive orders, frontier-lab governance "
+                  "news. Prefer specifics: papers, regulators, named labs."),
+        "feeds": [
+            {"name": "MIT Tech Review", "url": "https://www.technologyreview.com/feed/"},
+            {"name": "AI Snake Oil",    "url": "https://www.aisnakeoil.com/feed"},
+            {"name": "Hugging Face Blog","url": "https://huggingface.co/blog/feed.xml"},
+        ],
+    },
+    "schools": {
+        "emoji": "\U0001F3EB",  # school
+        "title": "Schools & education",
+        "focus": ("UK schools and education policy: Ofsted, SEND, exam reforms, "
+                  "school funding and London-specific schooling news. Parent "
+                  "angle — say what changes for families."),
+        "feeds": [
+            {"name": "BBC Education",      "url": "http://feeds.bbci.co.uk/news/education/rss.xml"},
+            {"name": "Guardian Education", "url": "https://www.theguardian.com/education/rss"},
+            {"name": "Schools Week",       "url": "https://schoolsweek.co.uk/feed/"},
+        ],
+    },
+    "health": {
+        "emoji": "\U0001F9EC",  # DNA
+        "title": "Health, sleep & longevity",
+        "focus": ("Sleep research, biomarkers, longevity science, intervention "
+                  "studies and wearable-data findings. Prefer peer-reviewed "
+                  "results; name researchers, institutions and specific numbers."),
+        "feeds": [
+            {"name": "STAT News",              "url": "https://www.statnews.com/feed/"},
+            {"name": "Eric Topol — Ground Truths", "url": "https://erictopol.substack.com/feed"},
+            {"name": "Guardian Science",       "url": "https://www.theguardian.com/science/rss"},
+        ],
+    },
+    "research": {
+        "emoji": "\U0001F52C",  # microscope
+        "title": "Verified research",
+        "focus": ("Significant new peer-reviewed findings across science, "
+                  "medicine, AI and tech — ONLY from highly-credible outlets. "
+                  "Name the paper, institution, and the specific result with "
+                  "a number where possible."),
+        "feeds": [
+            {"name": "Nature news", "url": "https://www.nature.com/nature.rss"},
+            {"name": "Quanta",      "url": "https://www.quantamagazine.org/feed/"},
+            {"name": "phys.org",    "url": "https://phys.org/rss-feed/"},
+        ],
+    },
 }
 
 
 def select_topics(now_london):
     """Pick today's topics by weekday (Mon=0 .. Fri=4):
-      - UK personal finance: Mondays only
-      - AI models and products: Fridays only
-      - B2B SaaS and go-to-market: Wednesdays only
-      - Politics: one per day, alternating Israel / UK every other calendar day
-      - Tech news (Techmeme): every day
+      Mon: UK personal finance, Schools & education, Politics, Tech
+      Tue: Israeli tech, Politics, Tech
+      Wed: B2B SaaS, Verified research, Politics, Tech
+      Thu: Health, sleep & longevity, Politics, Tech
+      Fri: AI models, AI safety & policy, Politics, Tech
+    Politics alternates Israel / UK every other calendar day.
+    Tech (Techmeme) runs daily. HN top 3 is appended in run().
     """
     weekday = now_london.weekday()
     politics = "israel" if now_london.toordinal() % 2 == 0 else "uk_politics"
@@ -227,11 +289,18 @@ def select_topics(now_london):
     keys = []
     if weekday == 0:          # Monday
         keys.append("finance")
-    if weekday == 4:          # Friday
-        keys.append("ai")
-    keys.append(politics)
+        keys.append("schools")
+    if weekday == 1:          # Tuesday
+        keys.append("israeli_tech")
     if weekday == 2:          # Wednesday
         keys.append("b2b")
+        keys.append("research")
+    if weekday == 3:          # Thursday
+        keys.append("health")
+    if weekday == 4:          # Friday
+        keys.append("ai")
+        keys.append("ai_safety")
+    keys.append(politics)
     keys.append("tech")
     return [TOPIC_CATALOG[k] for k in keys]
 
