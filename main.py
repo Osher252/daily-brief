@@ -304,15 +304,19 @@ def fetch_feed(url, max_items=15):
 def build_feed_context(feeds):
     """Fetch every feed for a topic and format it as readable context for the
     model: grouped by outlet, each item with title + (short) summary + URL.
-    Returns (context_text, total_item_count)."""
+    Also returns a {item_url: outlet_name} map so we can label sources even
+    when the model forgets to include outlet names.
+    Returns (context_text, total_item_count, url_to_outlet)."""
     blocks = []
     total = 0
+    url_to_outlet = {}
     for feed in feeds:
         items = fetch_feed(feed["url"])
         if not items:
             continue
         lines = ["[" + feed["name"] + "]"]
         for it in items:
+            url_to_outlet[it["link"]] = feed["name"]
             lines.append("- {title}{sep}{summary} <{link}>".format(
                 title=it["title"],
                 sep=" — " if it["summary"] else " ",
@@ -321,7 +325,28 @@ def build_feed_context(feeds):
             ))
         blocks.append("\n".join(lines))
         total += len(items)
-    return "\n\n".join(blocks), total
+    return "\n\n".join(blocks), total, url_to_outlet
+
+
+def _outlet_for_url(url, url_to_outlet):
+    """Find the friendly outlet name for a URL. Falls back to its domain."""
+    if url in url_to_outlet:
+        return url_to_outlet[url]
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(url).netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        # See if any known URL has the same domain.
+        for u, name in url_to_outlet.items():
+            uh = urlparse(u).netloc.lower()
+            if uh.startswith("www."):
+                uh = uh[4:]
+            if uh == host:
+                return name
+        return host or "Source"
+    except Exception:  # noqa: BLE001
+        return "Source"
 
 
 # --------------------------------------------------------------------------- #
@@ -432,7 +457,7 @@ def generate_section(client, topic, date_str):
     system = BASE_SYSTEM_PROMPT.format(date=date_str) + "\n\n" + READER_PROFILE
 
     feeds = topic.get("feeds", [])
-    context, item_count = build_feed_context(feeds)
+    context, item_count, url_to_outlet = build_feed_context(feeds)
     logger.info("Topic '%s': %d items across %d feed(s).",
                 topic["title"], item_count, len(feeds))
 
@@ -502,7 +527,10 @@ def generate_section(client, topic, date_str):
             for m in re.finditer(r"https?://[^\s;|<>]+", payload):
                 label = payload[prev_end:m.start()].strip(" ;|-,")
                 url = m.group(0).rstrip(".,)>]")
-                sources.append({"label": label or "Source", "url": url})
+                # Fall back to the outlet name we know for this URL.
+                if not label or label.lower() in ("source", "url", "link"):
+                    label = _outlet_for_url(url, url_to_outlet)
+                sources.append({"label": label, "url": url})
                 prev_end = m.end()
         else:
             body_lines.append(s)
