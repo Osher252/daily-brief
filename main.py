@@ -148,38 +148,67 @@ TOPIC_CATALOG = {
         "title": "AI models and products",
         "focus": ("New model releases, benchmarks, agentic tools and developer "
                   "products relevant to someone building AI-powered products."),
+        "feeds": [
+            {"name": "TechCrunch AI",   "url": "https://techcrunch.com/category/artificial-intelligence/feed/"},
+            {"name": "The Verge",       "url": "https://www.theverge.com/rss/index.xml"},
+            {"name": "Hugging Face Blog","url": "https://huggingface.co/blog/feed.xml"},
+        ],
     },
     "finance": {
         "emoji": "\U0001F4B7",  # pound banknote
         "title": "UK personal finance",
         "focus": ("Savings rates, ISA changes, mortgage rates and Bank of England "
-                  "moves. Name specific providers and products (for example Chase, "
-                  "Trading 212, Atom, Nationwide) with their current rates."),
+                  "moves. Name specific providers and products (Chase, Trading 212, "
+                  "Atom, Nationwide) with their current rates where available."),
+        "feeds": [
+            {"name": "Guardian Money", "url": "https://www.theguardian.com/money/rss"},
+            {"name": "BBC Business",   "url": "http://feeds.bbci.co.uk/news/business/rss.xml"},
+            {"name": "This Is Money",  "url": "https://www.thisismoney.co.uk/money/index.rss"},
+        ],
     },
     "israel": {
         "emoji": "\U0001F1EE\U0001F1F1",  # Israel flag
         "title": "Israeli politics",
         "focus": ("The coalition, elections, Gaza, and diplomatic developments. "
                   "Name the politicians and parties involved."),
+        "feeds": [
+            {"name": "+972 Magazine (left)",     "url": "https://www.972mag.com/feed/"},
+            {"name": "Times of Israel (centre)", "url": "https://www.timesofisrael.com/feed/"},
+            {"name": "Jerusalem Post (right)",   "url": "https://www.jpost.com/rss/rssfeedsfrontpage.aspx"},
+        ],
     },
     "uk_politics": {
         "emoji": "\U0001F1EC\U0001F1E7",  # UK flag
         "title": "UK politics",
         "focus": ("Labour, Reform, Starmer or a successor, and anything touching "
                   "schools or London. Name the politicians and policies."),
+        "feeds": [
+            {"name": "Guardian Politics (left)", "url": "https://www.theguardian.com/politics/rss"},
+            {"name": "BBC Politics (centre)",    "url": "http://feeds.bbci.co.uk/news/politics/rss.xml"},
+            {"name": "ConservativeHome (right)", "url": "https://conservativehome.com/feed/"},
+        ],
     },
-    "gadgets": {
+    "tech": {
         "emoji": "\U0001F4F1",  # mobile phone
-        "title": "Gadgets and tech",
-        "focus": ("Interesting consumer gadgets and tech hardware news — notable "
-                  "device launches, cool product releases and clever kit worth "
-                  "knowing about. Skip pure AI-model news (covered separately)."),
+        "title": "Tech news",
+        "focus": ("Interesting, fun or notable tech and gadget stories from across "
+                  "the industry — device launches, startups, internet culture, dev "
+                  "tools, security drama, anything an AI-product builder would find "
+                  "worth knowing. Skip pure AI-model releases (covered separately)."),
+        "feeds": [
+            {"name": "Techmeme", "url": "https://www.techmeme.com/feed.xml"},
+        ],
     },
     "b2b": {
         "emoji": "\U0001F4C8",  # chart increasing
         "title": "B2B SaaS and go-to-market",
         "focus": ("Funding rounds, go-to-market strategy shifts, AI in sales, and "
                   "SaaS metrics. Name the companies and the numbers."),
+        "feeds": [
+            {"name": "SaaStr",              "url": "https://www.saastr.com/feed/"},
+            {"name": "TechCrunch Venture",  "url": "https://techcrunch.com/category/venture/feed/"},
+            {"name": "TechCrunch Startups", "url": "https://techcrunch.com/category/startups/feed/"},
+        ],
     },
 }
 
@@ -190,7 +219,7 @@ def select_topics(now_london):
       - AI models and products: Fridays only
       - B2B SaaS and go-to-market: Wednesdays only
       - Politics: one per day, alternating Israel / UK every other calendar day
-      - Gadgets and tech: every day
+      - Tech news (Techmeme): every day
     """
     weekday = now_london.weekday()
     politics = "israel" if now_london.toordinal() % 2 == 0 else "uk_politics"
@@ -203,8 +232,96 @@ def select_topics(now_london):
     keys.append(politics)
     if weekday == 2:          # Wednesday
         keys.append("b2b")
-    keys.append("gadgets")
+    keys.append("tech")
     return [TOPIC_CATALOG[k] for k in keys]
+
+
+# --------------------------------------------------------------------------- #
+# RSS feed fetching — provides news context without paying for web search
+# --------------------------------------------------------------------------- #
+
+
+def _strip_html(s):
+    """Crude tag stripper for RSS <description>/<summary> HTML."""
+    s = re.sub(r"<[^>]+>", " ", s or "")
+    s = html.unescape(s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+class _Redirect308(urllib.request.HTTPRedirectHandler):
+    """urllib doesn't always handle HTTP 308 redirects — patch it in."""
+    def http_error_308(self, req, fp, code, msg, headers):
+        return self.http_error_301(req, fp, code, msg, headers)
+
+
+_FEED_OPENER = urllib.request.build_opener(_Redirect308())
+
+
+def fetch_feed(url, max_items=15):
+    """Fetch one RSS/Atom feed -> list of {title, link, summary}. Returns []
+    on any failure so a single bad feed never breaks a topic."""
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": _UA,
+            "Accept": "application/rss+xml, application/atom+xml, "
+                      "application/xml, text/xml, */*",
+        })
+        with _FEED_OPENER.open(req, timeout=10) as resp:
+            xml_bytes = resp.read()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Feed fetch failed [%s]: %s", url, exc)
+        return []
+
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError as exc:
+        logger.warning("Feed parse failed [%s]: %s", url, exc)
+        return []
+
+    items = []
+    for entry in root.iter():
+        tag = entry.tag.rsplit("}", 1)[-1]  # strip XML namespace
+        if tag not in ("item", "entry"):
+            continue
+        title = link = summary = ""
+        for child in entry:
+            ctag = child.tag.rsplit("}", 1)[-1]
+            text = (child.text or "").strip()
+            if ctag == "title":
+                title = text
+            elif ctag == "link" and not link:
+                link = text or child.get("href", "")
+            elif ctag in ("description", "summary", "content") and not summary:
+                summary = _strip_html(text)[:240]
+        if title and link:
+            items.append({"title": title, "link": link, "summary": summary})
+        if len(items) >= max_items:
+            break
+    return items
+
+
+def build_feed_context(feeds):
+    """Fetch every feed for a topic and format it as readable context for the
+    model: grouped by outlet, each item with title + (short) summary + URL.
+    Returns (context_text, total_item_count)."""
+    blocks = []
+    total = 0
+    for feed in feeds:
+        items = fetch_feed(feed["url"])
+        if not items:
+            continue
+        lines = ["[" + feed["name"] + "]"]
+        for it in items:
+            lines.append("- {title}{sep}{summary} <{link}>".format(
+                title=it["title"],
+                sep=" — " if it["summary"] else " ",
+                summary=it["summary"],
+                link=it["link"],
+            ))
+        blocks.append("\n".join(lines))
+        total += len(items)
+    return "\n\n".join(blocks), total
 
 
 # --------------------------------------------------------------------------- #
@@ -302,30 +419,46 @@ def _create_with_retry(client, max_attempts=4, **kwargs):
 
 
 # --------------------------------------------------------------------------- #
-# Section generation (one web-search call per topic)
+# Section generation (writes from pre-fetched RSS context — no web search)
 # --------------------------------------------------------------------------- #
 
 
 def generate_section(client, topic, date_str):
-    """Generate a single topic section. Never raises — failures are reported
-    in the returned text so one bad topic cannot crash the whole brief.
-
-    Returns a dict: {"title", "header", "text", "search_ok"}.
+    """Generate a single topic section using pre-fetched RSS feed context.
+    Never raises — degrades gracefully. Returns a dict with:
+      title, header, text, headline, sources, search_ok, usage.
     """
     header = "{emoji} {title}".format(emoji=topic["emoji"], title=topic["title"])
     system = BASE_SYSTEM_PROMPT.format(date=date_str) + "\n\n" + READER_PROFILE
 
+    feeds = topic.get("feeds", [])
+    context, item_count = build_feed_context(feeds)
+    logger.info("Topic '%s': %d items across %d feed(s).",
+                topic["title"], item_count, len(feeds))
+
+    if item_count == 0:
+        text = header + "\n- News for this topic is unavailable today (feeds were unreachable)."
+        return {"title": topic["title"], "header": header, "text": text,
+                "headline": "no fresh news today", "sources": [],
+                "search_ok": False, "usage": dict(_ZERO_USAGE)}
+
     user_message = (
-        "Write the \"{title}\" section of today's brief.\n"
+        "Write the \"{title}\" section of today's brief using ONLY the items below. "
+        "Do not invent facts or sources.\n"
         "Focus: {focus}\n\n"
-        "Output exactly in this structure:\n"
+        "Recent items from the listed outlets (use only these):\n\n"
+        "{context}\n\n"
+        "Output exactly:\n"
         "Line 1: the header exactly as: {header}\n"
-        "Line 2: HEADLINE: then ONE punchy sentence (under 16 words) capturing the "
-        "single biggest story for this topic, with a number or named entity.\n"
-        "Then exactly 3 dash-prefixed bullet points giving the fuller detail, each "
-        "one short sentence with a specific number, named company, person or product.\n\n"
+        "Line 2: HEADLINE: ONE punchy sentence (under 16 words) capturing the single "
+        "biggest story for this topic, with a number or named entity.\n"
+        "Then exactly 3 dash-prefixed bullet points giving the fuller detail. "
+        "Each bullet is one short sentence with a specific number, name, company or product.\n"
+        "Last line: Sources: <outlet 1> <url 1> ; <outlet 2> <url 2> ; <outlet 3> <url 3> — "
+        "pick one URL from each different outlet above (so the reader can compare). "
+        "1 to 3 sources is fine. Use URLs EXACTLY as shown; do not invent them.\n\n"
         "Plain text only. Start with the header line. No preamble and no sign-off."
-    ).format(title=topic["title"], focus=topic["focus"], header=header)
+    ).format(title=topic["title"], focus=topic["focus"], header=header, context=context)
 
     try:
         response = _create_with_retry(
@@ -333,68 +466,61 @@ def generate_section(client, topic, date_str):
             model=MODEL,
             max_tokens=1500,
             system=system,
-            tools=[WEB_SEARCH_TOOL],
             messages=[{"role": "user", "content": user_message}],
         )
-    except Exception as exc:  # noqa: BLE001 — we want to degrade gracefully
+    except Exception as exc:  # noqa: BLE001 — degrade gracefully
         logger.error("Topic '%s' API call failed: %s", topic["title"], exc)
         text = header + "\n- News for this topic is unavailable today (the request failed)."
         return {"title": topic["title"], "header": header, "text": text,
-                "headline": "no fresh news today", "search_ok": False,
-                "usage": dict(_ZERO_USAGE)}
+                "headline": "no fresh news today", "sources": [],
+                "search_ok": False, "usage": dict(_ZERO_USAGE)}
 
-    text, searches, errors = _parse_response(response)
+    text, _searches, _errors = _parse_response(response)
 
-    # Some models (notably Haiku) narrate before the content, e.g.
-    # "I'll search for...Here is the section:". The section must begin at the
-    # emoji header, so drop anything before the first occurrence of the emoji.
+    # Strip any narration before the emoji header (Haiku sometimes adds preamble).
     idx = text.find(topic["emoji"])
     if idx > 0:
         text = text[idx:].strip()
     elif idx == -1 and text:
         text = header + "\n" + text  # model omitted the header; restore it
 
-    # Pull out the HEADLINE line (used for the short spoken brief) and keep the
-    # header + bullets as the full section body (used for the web page).
+    # Parse out HEADLINE, Sources, and bullets.
     headline = ""
+    sources = []
     body_lines = []
     for line in text.split("\n"):
         s = line.strip()
         if not s:
             continue
-        if s.upper().startswith("HEADLINE:"):
+        upper = s.upper()
+        if upper.startswith("HEADLINE:"):
             headline = s.split(":", 1)[1].strip()
+        elif upper.startswith("SOURCES:"):
+            payload = s.split(":", 1)[1].strip()
+            # Find every URL; the words before each are its label/outlet.
+            prev_end = 0
+            for m in re.finditer(r"https?://[^\s;|<>]+", payload):
+                label = payload[prev_end:m.start()].strip(" ;|-,")
+                url = m.group(0).rstrip(".,)>]")
+                sources.append({"label": label or "Source", "url": url})
+                prev_end = m.end()
         else:
             body_lines.append(s)
+
     text = "\n".join(body_lines)
-    if not headline:  # fallback: use the first bullet
+    if not headline:
         for s in body_lines:
             if s.startswith("- "):
                 headline = s[2:].strip()
                 break
-
-    # 'max_uses_exceeded' is not a real failure — the searches that ran returned
-    # results; the model merely asked for one more than the cap allows.
-    real_errors = [e for e in errors if e != "max_uses_exceeded"]
-    search_ok = searches > 0 and not real_errors
-
-    if real_errors:
-        logger.warning("Topic '%s' web search errors: %s", topic["title"], real_errors)
-    logger.info(
-        "Topic '%s': %d web search(es), errors=%s",
-        topic["title"], searches, errors or "none",
-    )
-
+    if not headline:
+        headline = "no top story today"
     if not text:
         text = header + "\n- No content was returned for this topic today."
-    elif not search_ok:
-        # Keep whatever Claude wrote but flag that it is not freshly sourced.
-        text = text + "\n- (Note: live web results were unavailable for this topic, so the above may not be current.)"
-    if not headline:
-        headline = "no fresh news today"
 
     return {"title": topic["title"], "header": header, "text": text,
-            "headline": headline, "search_ok": search_ok, "usage": _usage_of(response)}
+            "headline": headline, "sources": sources,
+            "search_ok": True, "usage": _usage_of(response)}
 
 
 # --------------------------------------------------------------------------- #
@@ -499,13 +625,17 @@ HTML_TEMPLATE = """<!doctype html>
  h2 {{ font-size: 1.15rem; margin: 0 0 .5rem; }}
  ul {{ margin: 0; padding-left: 1.15rem; }}
  li {{ margin: 0 0 .5rem; }}
+ .sources {{ margin: .35rem 0 0; font-size: .85rem; color: #888; }}
+ .sources a {{ color: #0a7; text-decoration: none; margin: 0 .25rem; }}
+ .sources a:hover {{ text-decoration: underline; }}
  .closing {{ margin-top: 2rem; padding: 1rem 1.1rem; background: #f4f6f8;
             border-radius: 12px; font-weight: 600; }}
  .foot {{ margin-top: 2.5rem; color: #999; font-size: .8rem; }}
  @media (prefers-color-scheme: dark) {{
    body {{ background: #000; color: #eee; }}
    .closing {{ background: #1c1c1e; }}
-   .date, .foot {{ color: #888; }}
+   .date, .foot, .sources {{ color: #888; }}
+   .sources a {{ color: #4cd9a9; }}
  }}
 </style>
 </head>
@@ -520,6 +650,23 @@ HTML_TEMPLATE = """<!doctype html>
 """
 
 
+def _sources_html(sources, inline_style=""):
+    """Render a section's sources as clickable links."""
+    if not sources:
+        return ""
+    links = [
+        '<a href="{u}" target="_blank" rel="noopener">{l}</a>'.format(
+            u=html.escape(src["url"], quote=True),
+            l=html.escape(src["label"]),
+        )
+        for src in sources
+    ]
+    style = ' style="{}"'.format(inline_style) if inline_style else ""
+    cls = "" if inline_style else ' class="sources"'
+    return '<p{cls}{style}>Sources: {body}</p>'.format(
+        cls=cls, style=style, body=" · ".join(links))
+
+
 def build_html(sections, closing, now_london):
     blocks = []
     for s in sections:
@@ -529,8 +676,9 @@ def build_html(sections, closing, now_london):
         for ln in lines[1:]:
             text = ln[2:].strip() if ln.startswith("- ") else ln
             bullets.append("<li>{}</li>".format(html.escape(text)))
-        blocks.append("<section><h2>{}</h2><ul>{}</ul></section>".format(
-            html.escape(header), "".join(bullets)))
+        sources_html = _sources_html(s.get("sources", []))
+        blocks.append("<section><h2>{h}</h2><ul>{b}</ul>{s}</section>".format(
+            h=html.escape(header), b="".join(bullets), s=sources_html))
     return HTML_TEMPLATE.format(
         date=now_london.strftime("%A %-d %B %Y"),
         body="\n".join(blocks),
@@ -557,6 +705,12 @@ def build_email_html(sections, closing, now_london):
             b = ln[2:].strip() if ln.startswith("- ") else ln
             p.append('<li style="margin:0 0 6px;">{}</li>'.format(html.escape(b)))
         p.append('</ul>')
+        srcs = _sources_html(
+            s.get("sources", []),
+            inline_style="margin:6px 0 0;font-size:13px;color:#888;",
+        )
+        if srcs:
+            p.append(srcs)
     p.append('<p style="margin-top:24px;padding:12px 14px;background:#f4f6f8;'
              'border-radius:10px;font-weight:600;">{}</p>'.format(html.escape(closing)))
     p.append('<p style="color:#999;font-size:12px;margin-top:24px;">'
