@@ -328,6 +328,128 @@ def build_feed_context(feeds):
     return "\n\n".join(blocks), total, url_to_outlet
 
 
+# --------------------------------------------------------------------------- #
+# Morning extras: weather, currency, Hacker News top — all free APIs/feeds
+# --------------------------------------------------------------------------- #
+
+_WEATHER_CODES = {
+    0: "clear", 1: "mostly clear", 2: "partly cloudy", 3: "overcast",
+    45: "foggy", 48: "foggy",
+    51: "light drizzle", 53: "drizzle", 55: "heavy drizzle",
+    61: "light rain", 63: "rain", 65: "heavy rain",
+    66: "freezing rain", 67: "freezing rain",
+    71: "light snow", 73: "snow", 75: "heavy snow", 77: "snow grains",
+    80: "rain showers", 81: "rain showers", 82: "heavy showers",
+    85: "snow showers", 86: "snow showers",
+    95: "thunderstorm", 96: "thunderstorm with hail", 99: "thunderstorm with hail",
+}
+
+
+def fetch_weather(lat=51.583, lon=-0.020, place="Walthamstow"):
+    """One-line weather summary from Open-Meteo (no API key)."""
+    url = (
+        "https://api.open-meteo.com/v1/forecast"
+        "?latitude={lat}&longitude={lon}"
+        "&current_weather=true"
+        "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+        "&timezone=Europe%2FLondon&forecast_days=1"
+    ).format(lat=lat, lon=lon)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": _UA})
+        with _FEED_OPENER.open(req, timeout=8) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        cur = data.get("current_weather") or {}
+        daily = data.get("daily") or {}
+        temp = cur.get("temperature")
+        desc = _WEATHER_CODES.get(int(cur.get("weathercode", 0)), "mixed weather")
+        if temp is None:
+            return ""
+        bits = ["{place}: {t:.0f}°C, {d}".format(place=place, t=temp, d=desc)]
+        hi = (daily.get("temperature_2m_max") or [None])[0]
+        lo = (daily.get("temperature_2m_min") or [None])[0]
+        if hi is not None and lo is not None:
+            bits.append("high {h:.0f}° / low {l:.0f}°".format(h=hi, l=lo))
+        pop = (daily.get("precipitation_probability_max") or [None])[0]
+        if pop is not None and pop >= 20:
+            bits.append("{p}% chance of rain".format(p=int(pop)))
+        return ", ".join(bits) + "."
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Weather fetch failed: %s", exc)
+        return ""
+
+
+def fetch_currency():
+    """One-line FX rates (no API key)."""
+    try:
+        req = urllib.request.Request(
+            "https://api.frankfurter.app/latest?base=GBP&symbols=USD,ILS",
+            headers={"User-Agent": _UA},
+        )
+        with _FEED_OPENER.open(req, timeout=8) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        rates = data.get("rates") or {}
+        bits = []
+        for sym in ("USD", "ILS"):
+            v = rates.get(sym)
+            if v is not None:
+                bits.append("GBP/{s} {v:.3f}".format(s=sym, v=v))
+        return " · ".join(bits) + "." if bits else ""
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Currency fetch failed: %s", exc)
+        return ""
+
+
+def _hn_via_firebase(count):
+    """Fallback HN fetcher using the official Firebase API."""
+    items = []
+    try:
+        req = urllib.request.Request(
+            "https://hacker-news.firebaseio.com/v0/topstories.json",
+            headers={"User-Agent": _UA},
+        )
+        with _FEED_OPENER.open(req, timeout=8) as r:
+            ids = json.loads(r.read().decode("utf-8"))[:count]
+        for sid in ids:
+            r2 = urllib.request.Request(
+                "https://hacker-news.firebaseio.com/v0/item/{}.json".format(sid),
+                headers={"User-Agent": _UA},
+            )
+            with _FEED_OPENER.open(r2, timeout=8) as resp:
+                d = json.loads(resp.read().decode("utf-8")) or {}
+            title = (d.get("title") or "").strip()
+            link = d.get("url") or "https://news.ycombinator.com/item?id={}".format(sid)
+            if title:
+                items.append({"title": title, "link": link, "summary": ""})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("HN Firebase fallback failed: %s", exc)
+    return items
+
+
+def fetch_hn_section(count=3):
+    """Top stories from Hacker News as a ready-to-render section dict.
+    No Claude call — deterministic and free."""
+    items = fetch_feed("https://hnrss.org/frontpage?count={}".format(count), max_items=count)
+    if not items:
+        items = _hn_via_firebase(count)
+    if not items:
+        return None
+    header = "\U0001F4F0 Hacker News top {}".format(len(items))
+    body_lines = [header]
+    for it in items:
+        # Embed the article URL in the bullet so the renderers can link it.
+        body_lines.append("- {title} <{url}>".format(title=it["title"], url=it["link"]))
+    return {
+        "title": "Hacker News",
+        "header": header,
+        "text": "\n".join(body_lines),
+        "headline": items[0]["title"] if items else "",
+        "sources": [],            # links are inline in the bullets
+        "search_ok": True,
+        "usage": dict(_ZERO_USAGE),
+        "skip_spoken": True,      # tech links don't read well aloud
+    }
+
+
 def _outlet_for_url(url, url_to_outlet):
     """Find the friendly outlet name for a URL. Falls back to its domain."""
     if url in url_to_outlet:
@@ -479,6 +601,10 @@ def generate_section(client, topic, date_str):
         "biggest story for this topic, with a number or named entity.\n"
         "Then exactly 3 dash-prefixed bullet points giving the fuller detail. "
         "Each bullet is one short sentence with a specific number, name, company or product.\n"
+        "Then ONE final dash-prefixed bullet that begins with 'So what for you:' "
+        "and gives a short, specific implication for THIS reader's situation "
+        "(fractional GTM advisor, AI-product builder, UK personal finance, "
+        "parent in Walthamstow). One sentence. Make it land.\n"
         "Last line: Sources: <outlet 1> <url 1> ; <outlet 2> <url 2> ; <outlet 3> <url 3> — "
         "pick one URL from each different outlet above (so the reader can compare). "
         "1 to 3 sources is fine. Use URLs EXACTLY as shown; do not invent them.\n\n"
@@ -604,32 +730,33 @@ def _trim_to_sentence(text, budget):
     return cut.rstrip()
 
 
-def build_main_text(sections, closing, now_london):
+def build_main_text(sections, closing, now_london, weather_line="", currency_line=""):
+    """Full plain-text brief: greeting + morning extras + sections + closing."""
     greeting = "Good morning. Here is your daily brief for {d}.".format(
         d=now_london.strftime("%A %-d %B %Y")
     )
+    intro_lines = [greeting]
+    if weather_line:
+        intro_lines.append(weather_line)
+    if currency_line:
+        intro_lines.append(currency_line)
+    intro = "\n\n".join(intro_lines)
     body = "\n\n".join(s["text"] for s in sections)
-    full = greeting + "\n\n" + body + "\n\n" + closing
-    if len(full) <= MAX_MAINTEXT_CHARS:
-        return full
-
-    # Over Alexa's limit — keep the greeting and closing, trim the body to fit.
-    reserve = len(greeting) + len(closing) + 4  # 4 for the two "\n\n" joins
-    body = _trim_to_sentence(body, MAX_MAINTEXT_CHARS - reserve)
-    logger.warning(
-        "Brief exceeded %d chars; trimmed the body to fit Alexa's limit.",
-        MAX_MAINTEXT_CHARS,
-    )
-    return greeting + "\n\n" + body + "\n\n" + closing
+    return intro + "\n\n" + body + "\n\n" + closing
 
 
-def build_short_text(sections, closing, now_london):
-    """The short spoken brief: greeting + one headline per topic + closing."""
+def build_short_text(sections, closing, now_london, weather_line=""):
+    """The short spoken brief: greeting + optional weather + one headline per
+    topic + closing. Sections with skip_spoken=True (e.g. HN) are skipped."""
     greeting = "Good morning. Here are your headlines for {d}.".format(
         d=now_london.strftime("%A %-d %B %Y")
     )
     parts = [greeting]
+    if weather_line:
+        parts.append(weather_line)
     for s in sections:
+        if s.get("skip_spoken"):
+            continue
         headline = (s.get("headline") or "").strip().rstrip(".")
         if headline:
             parts.append("{}. {}.".format(s["title"], headline))
@@ -656,26 +783,43 @@ HTML_TEMPLATE = """<!doctype html>
  .sources {{ margin: .35rem 0 0; font-size: .85rem; color: #888; }}
  .sources a {{ color: #0a7; text-decoration: none; margin: 0 .25rem; }}
  .sources a:hover {{ text-decoration: underline; }}
+ .morning {{ margin: 0 0 1.6rem; padding: .7rem 1rem; background: #f4f6f8;
+            border-radius: 10px; font-size: .95rem; }}
+ .morning p {{ margin: .15rem 0; }}
+ li a {{ color: #0a7; text-decoration: none; }}
+ li a:hover {{ text-decoration: underline; }}
  .closing {{ margin-top: 2rem; padding: 1rem 1.1rem; background: #f4f6f8;
             border-radius: 12px; font-weight: 600; }}
  .foot {{ margin-top: 2.5rem; color: #999; font-size: .8rem; }}
  @media (prefers-color-scheme: dark) {{
    body {{ background: #000; color: #eee; }}
-   .closing {{ background: #1c1c1e; }}
+   .closing, .morning {{ background: #1c1c1e; }}
    .date, .foot, .sources {{ color: #888; }}
-   .sources a {{ color: #4cd9a9; }}
+   .sources a, li a {{ color: #4cd9a9; }}
  }}
 </style>
 </head>
 <body>
 <h1>Your Daily Brief</h1>
 <p class="date">{date}</p>
-{body}
+{morning}{body}
 <p class="closing">{closing}</p>
 <p class="foot">Updated {updated}. Generated automatically each weekday.</p>
 </body>
 </html>
 """
+
+
+def _bullet_html(bullet_text):
+    """Render a bullet to HTML. If it ends with '<URL>', the bullet text is
+    rendered as a clickable link to that URL."""
+    m = re.search(r"\s<(https?://[^>]+)>$", bullet_text)
+    if m:
+        text_part = bullet_text[:m.start()].strip().lstrip('"').rstrip('"')
+        url = m.group(1)
+        return '<li><a href="{u}" target="_blank" rel="noopener">{t}</a></li>'.format(
+            u=html.escape(url, quote=True), t=html.escape(text_part))
+    return "<li>{}</li>".format(html.escape(bullet_text))
 
 
 def _sources_html(sources, inline_style=""):
@@ -695,27 +839,47 @@ def _sources_html(sources, inline_style=""):
         cls=cls, style=style, body=" · ".join(links))
 
 
-def build_html(sections, closing, now_london):
+def build_html(sections, closing, now_london, weather_line="", currency_line=""):
+    morning_html = ""
+    if weather_line or currency_line:
+        bits = []
+        if weather_line:
+            bits.append("<p>☀️ {}</p>".format(html.escape(weather_line)))
+        if currency_line:
+            bits.append("<p>💱 {}</p>".format(html.escape(currency_line)))
+        morning_html = '<div class="morning">' + "".join(bits) + "</div>\n"
+
     blocks = []
     for s in sections:
         lines = [ln.strip() for ln in s["text"].split("\n") if ln.strip()]
         header = lines[0] if lines else s["title"]
-        bullets = []
-        for ln in lines[1:]:
-            text = ln[2:].strip() if ln.startswith("- ") else ln
-            bullets.append("<li>{}</li>".format(html.escape(text)))
+        bullets = "".join(_bullet_html(ln[2:].strip() if ln.startswith("- ") else ln)
+                          for ln in lines[1:])
         sources_html = _sources_html(s.get("sources", []))
         blocks.append("<section><h2>{h}</h2><ul>{b}</ul>{s}</section>".format(
-            h=html.escape(header), b="".join(bullets), s=sources_html))
+            h=html.escape(header), b=bullets, s=sources_html))
     return HTML_TEMPLATE.format(
         date=now_london.strftime("%A %-d %B %Y"),
+        morning=morning_html,
         body="\n".join(blocks),
         closing=html.escape(closing),
         updated=now_london.strftime("%H:%M %Z"),
     )
 
 
-def build_email_html(sections, closing, now_london):
+def _email_bullet(bullet_text):
+    """Bullet HTML for email, with inline link if URL is embedded."""
+    m = re.search(r"\s<(https?://[^>]+)>$", bullet_text)
+    if m:
+        text_part = bullet_text[:m.start()].strip().lstrip('"').rstrip('"')
+        url = m.group(1)
+        return ('<li style="margin:0 0 6px;">'
+                '<a href="{u}" style="color:#0a7;text-decoration:none;">{t}</a></li>'
+                ).format(u=html.escape(url, quote=True), t=html.escape(text_part))
+    return '<li style="margin:0 0 6px;">{}</li>'.format(html.escape(bullet_text))
+
+
+def build_email_html(sections, closing, now_london, weather_line="", currency_line=""):
     """Full brief as an email body with inline styles (robust across clients)."""
     date_str = now_london.strftime("%A %-d %B %Y")
     p = ['<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;'
@@ -723,6 +887,16 @@ def build_email_html(sections, closing, now_london):
     p.append('<h1 style="font-size:20px;margin:0 0 2px;">Your Daily Brief</h1>')
     p.append('<p style="color:#666;margin:0 0 20px;font-size:14px;">{}</p>'.format(
         html.escape(date_str)))
+    if weather_line or currency_line:
+        p.append('<div style="margin:0 0 16px;padding:10px 14px;background:#f4f6f8;'
+                 'border-radius:8px;font-size:14px;">')
+        if weather_line:
+            p.append('<p style="margin:2px 0;">☀️ {}</p>'.format(
+                html.escape(weather_line)))
+        if currency_line:
+            p.append('<p style="margin:2px 0;">\U0001F4B1 {}</p>'.format(
+                html.escape(currency_line)))
+        p.append('</div>')
     for s in sections:
         lines = [ln.strip() for ln in s["text"].split("\n") if ln.strip()]
         header = lines[0] if lines else s["title"]
@@ -731,7 +905,7 @@ def build_email_html(sections, closing, now_london):
         p.append('<ul style="margin:0;padding-left:18px;">')
         for ln in lines[1:]:
             b = ln[2:].strip() if ln.startswith("- ") else ln
-            p.append('<li style="margin:0 0 6px;">{}</li>'.format(html.escape(b)))
+            p.append(_email_bullet(b))
         p.append('</ul>')
         srcs = _sources_html(
             s.get("sources", []),
@@ -842,7 +1016,8 @@ def generate_audio_segments(text):
     return True
 
 
-def write_outputs(short_text, full_text, sections, closing, audio_url, now_london, now_utc):
+def write_outputs(short_text, full_text, sections, closing, audio_url,
+                  weather_line, currency_line, now_london, now_utc):
     date_compact = now_london.strftime("%Y%m%d")
 
     txt_path = OUTPUT_DIR / "{d}_brief.txt".format(d=date_compact)
@@ -861,7 +1036,11 @@ def write_outputs(short_text, full_text, sections, closing, audio_url, now_londo
     feed_path.write_text(json.dumps(feed, ensure_ascii=False, indent=2), encoding="utf-8")
 
     html_path = OUTPUT_DIR / "index.html"
-    html_path.write_text(build_html(sections, closing, now_london), encoding="utf-8")
+    html_path.write_text(
+        build_html(sections, closing, now_london,
+                   weather_line=weather_line, currency_line=currency_line),
+        encoding="utf-8",
+    )
 
     return txt_path, feed_path, html_path
 
@@ -887,11 +1066,27 @@ def run():
         logger.info("Generating section: %s", topic["title"])
         sections.append(generate_section(client, topic, date_str))
 
+    # Always-on extras: Hacker News top 3 at the end of every brief.
+    hn = fetch_hn_section(count=3)
+    if hn is not None:
+        sections.append(hn)
+
+    # Free one-line morning extras (weather + currency).
+    weather_line = fetch_weather()
+    currency_line = fetch_currency()
+    if weather_line:
+        logger.info("Weather: %s", weather_line)
+    if currency_line:
+        logger.info("Currency: %s", currency_line)
+
     interim = "\n\n".join(s["text"] for s in sections)
     closing, closing_usage = generate_closing(client, interim, date_str)
 
-    full_text = build_main_text(sections, closing, now_london)
-    short_text = build_short_text(sections, closing, now_london)
+    full_text = build_main_text(sections, closing, now_london,
+                                weather_line=weather_line,
+                                currency_line=currency_line)
+    short_text = build_short_text(sections, closing, now_london,
+                                  weather_line=weather_line)
 
     # Generate smooth spoken audio (OpenAI TTS), alternating voices per segment.
     # The workflow stitches + transcodes the segments into brief.mp3.
@@ -905,13 +1100,16 @@ def run():
         )
 
     txt_path, feed_path, html_path = write_outputs(
-        short_text, full_text, sections, closing, audio_url, now_london, now_utc
+        short_text, full_text, sections, closing, audio_url,
+        weather_line, currency_line, now_london, now_utc,
     )
 
     # Email the full brief (no-op unless RESEND_API_KEY is set).
     send_email(
         "Your Daily Brief — {}".format(date_str),
-        build_email_html(sections, closing, now_london),
+        build_email_html(sections, closing, now_london,
+                         weather_line=weather_line,
+                         currency_line=currency_line),
     )
 
     # Tally usage and estimate the run's cost.
