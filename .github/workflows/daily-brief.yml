@@ -71,6 +71,7 @@ jobs:
           # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}   # voice off — skill falls back to text
           BRIEF_EMAIL_FROM: ${{ vars.BRIEF_EMAIL_FROM }}
           BRIEF_EMAIL_TO: ${{ vars.BRIEF_EMAIL_TO }}
+          BRIEF_EMAIL_CC: ${{ vars.BRIEF_EMAIL_CC }}
         run: python main.py
 
       - name: Stitch + transcode audio to Alexa's spec (mono, 24 kHz, 48 kbps)

@@ -68,6 +68,10 @@ USD_TO_GBP = 0.79          # rough, for a friendly pence figure in the log
 # enable (no-op if unset). Recipient/sender can be overridden via env.
 EMAIL_TO = os.getenv("BRIEF_EMAIL_TO") or "imjohnny252@gmail.com"
 EMAIL_FROM = os.getenv("BRIEF_EMAIL_FROM") or "Daily Brief <onboarding@resend.dev>"
+# Optional comma-separated CC recipients. Note: Resend's free tier (using the
+# onboarding@resend.dev sender) only delivers to the account owner — to CC
+# others, verify their email in Resend or verify your own domain.
+EMAIL_CC = [a.strip() for a in (os.getenv("BRIEF_EMAIL_CC") or "").split(",") if a.strip()]
 
 # A real browser UA — Cloudflare/WAFs block the default urllib agent (err 1010).
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -1001,12 +1005,15 @@ def send_email(subject, html_body):
     if not key:
         logger.info("RESEND_API_KEY not set; skipping email.")
         return
-    payload = json.dumps({
+    body = {
         "from": EMAIL_FROM,
         "to": [EMAIL_TO],
         "subject": subject,
         "html": html_body,
-    }).encode("utf-8")
+    }
+    if EMAIL_CC:
+        body["cc"] = EMAIL_CC
+    payload = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         "https://api.resend.com/emails",
         data=payload,
