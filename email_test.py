@@ -12,17 +12,22 @@ import urllib.request
 key = os.environ.get("RESEND_API_KEY")
 frm = os.environ.get("BRIEF_EMAIL_FROM") or "Daily Brief <onboarding@resend.dev>"
 to = os.environ.get("BRIEF_EMAIL_TO") or "imjohnny252@gmail.com"
+cc = [a.strip() for a in (os.environ.get("BRIEF_EMAIL_CC") or "").split(",") if a.strip()]
 
 print("from:", frm)
 print("to:", to)
+print("cc:", cc or "(none)")
 print("RESEND_API_KEY set:", bool(key))
 
-payload = json.dumps({
+body = {
     "from": frm,
     "to": [to],
     "subject": "Daily Brief — test email",
     "html": "<p>This is a test from your daily-brief setup. If you got this, email works.</p>",
-}).encode("utf-8")
+}
+if cc:
+    body["cc"] = cc
+payload = json.dumps(body).encode("utf-8")
 
 req = urllib.request.Request(
     "https://api.resend.com/emails",
