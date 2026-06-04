@@ -421,12 +421,45 @@ _WEATHER_CODES = {
 }
 
 
+def _fmt_hour(h):
+    """0 -> 'midnight', 12 -> 'noon', 7 -> '7am', 14 -> '2pm'."""
+    h = h % 24
+    if h == 0:
+        return "midnight"
+    if h == 12:
+        return "noon"
+    if h < 12:
+        return "{}am".format(h)
+    return "{}pm".format(h - 12)
+
+
+def _rain_windows(hours, probs, threshold=50):
+    """Group hours where prob >= threshold into (start, end_exclusive) windows."""
+    out = []
+    start = last = None
+    for h, p in zip(hours, probs):
+        if p is None:
+            continue
+        if p >= threshold:
+            if start is None:
+                start = h
+            last = h
+        elif start is not None:
+            out.append((start, last + 1))
+            start = last = None
+    if start is not None:
+        out.append((start, last + 1))
+    return out
+
+
 def fetch_weather(lat=51.583, lon=-0.020, place="Walthamstow"):
-    """One-line weather summary from Open-Meteo (no API key)."""
+    """One-line weather summary from Open-Meteo (no API key). Includes the
+    hour windows when rain is likely so the user can plan the day."""
     url = (
         "https://api.open-meteo.com/v1/forecast"
         "?latitude={lat}&longitude={lon}"
         "&current_weather=true"
+        "&hourly=precipitation_probability"
         "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max"
         "&timezone=Europe%2FLondon&forecast_days=1"
     ).format(lat=lat, lon=lon)
@@ -447,7 +480,27 @@ def fetch_weather(lat=51.583, lon=-0.020, place="Walthamstow"):
             bits.append("high {h:.0f}° / low {l:.0f}°".format(h=hi, l=lo))
         pop = (daily.get("precipitation_probability_max") or [None])[0]
         if pop is not None and pop >= 20:
-            bits.append("{p}% chance of rain".format(p=int(pop)))
+            rain_bit = "{p}% chance of rain".format(p=int(pop))
+            # Pull hourly probabilities for today only and find rain windows.
+            hourly = data.get("hourly") or {}
+            times = hourly.get("time") or []
+            hprobs = hourly.get("precipitation_probability") or []
+            today_date = times[0][:10] if times and isinstance(times[0], str) else ""
+            hours, p_today = [], []
+            for t, pv in zip(times, hprobs):
+                if isinstance(t, str) and t.startswith(today_date):
+                    hours.append(int(t[11:13]))
+                    p_today.append(pv)
+            wins = _rain_windows(hours, p_today, threshold=50)
+            if wins and wins[0][0] is not None:
+                # Collapse to "most of the day" if a single ~10h+ window.
+                if len(wins) == 1 and (wins[0][1] - wins[0][0]) >= 10:
+                    rain_bit += " (expected most of the day)"
+                else:
+                    parts = ["{a}–{b}".format(a=_fmt_hour(s), b=_fmt_hour(e))
+                             for s, e in wins[:2]]
+                    rain_bit += " (expected " + " and ".join(parts) + ")"
+            bits.append(rain_bit)
         return ", ".join(bits) + "."
     except Exception as exc:  # noqa: BLE001
         logger.warning("Weather fetch failed: %s", exc)
